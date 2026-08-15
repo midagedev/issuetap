@@ -1,0 +1,25 @@
+name: pagination-drift
+description: >
+  DC startAt pagination drifts when a fault is armed. Cloud nextPageToken
+  is stable; this is why Cloud abandoned startAt.
+fixture: ../fixtures/tiny.yaml
+dialect: dc
+locale: en
+faults:
+  - name: drift
+    drift: true
+    pathContains: /search
+assertions:
+  - name: first page is stable
+    method: POST
+    path: /rest/api/2/search
+    auth: true
+    body: {jql: "ORDER BY key ASC", startAt: 0, maxResults: 2}
+    wantStatus: 200
+    wantContains: TAP-1
+  - name: second page under drift skips
+    method: POST
+    path: /rest/api/2/search
+    auth: true
+    body: {jql: "ORDER BY key ASC", startAt: 2, maxResults: 2}
+    wantStatus: 200

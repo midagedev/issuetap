@@ -1,0 +1,36 @@
+# Dependencies
+node_modules/
+vendor/
+
+# Build outputs
+bin/
+dist/app/assets/
+dist/app/index.html
+coverage/
+
+# Keep the embed placeholder tracked.
+!dist/app/.placeholder
+
+# Local runtime
+.private/
+.issuetap/
+data/
+tmp/
+snapshots/
+scratch/
+*.zip
+
+# Environment — never commit live tokens
+.env
+.env.*
+!.env.example
+
+# Go
+*.test
+*.out
+
+# OS and editor
+.DS_Store
+.idea/
+.vscode/
+*.tsbuildinfo

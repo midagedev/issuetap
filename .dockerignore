@@ -1,0 +1,7 @@
+.git
+node_modules
+scratch
+.bin
+*.zip
+.env
+.env.*

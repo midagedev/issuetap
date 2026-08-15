@@ -1,0 +1,12 @@
+services:
+  issuetap:
+    build: .
+    ports:
+      - "8080:8080"
+    environment:
+      ISSUETAP_ADDR: 0.0.0.0:8080
+      ISSUETAP_LOCALE: en
+      ISSUETAP_DIALECT: cloud
+      ISSUETAP_FIXTURE: /fixtures/tiny.yaml
+    volumes:
+      - ./examples/fixtures:/fixtures:ro

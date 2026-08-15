@@ -1,0 +1,28 @@
+name: rate-limit-burst
+description: >
+  One 429 with Retry-After on POST /search/jql, then success. A correct
+  client waits and retries; a client that ignores Retry-After will fail
+  the next assertion if it does not retry itself.
+fixture: ../fixtures/tiny.yaml
+dialect: cloud
+locale: en
+faults:
+  - name: one-429
+    times: 1
+    status: 429
+    retryAfter: 1
+    pathContains: /search/jql
+assertions:
+  - name: first search is 429
+    method: POST
+    path: /rest/api/3/search/jql
+    auth: true
+    body: {jql: "ORDER BY updated DESC", maxResults: 50}
+    wantStatus: 429
+  - name: second search is 200
+    method: POST
+    path: /rest/api/3/search/jql
+    auth: true
+    body: {jql: "ORDER BY updated DESC", maxResults: 50}
+    wantStatus: 200
+    wantContains: TAP-1

@@ -1,0 +1,95 @@
+# Korean-locale fixture. Names are the ones a ko_KR Cloud site actually
+# returns (GET /status, /issuetype, /field on 2026-08-15). Priority names
+# on that site stayed English; this fixture still uses Korean priority
+# names so a client that keys on "High" fails here. See docs/LOCALES.md.
+seed: 1
+locale: ko
+timezone: "+0900"
+
+users:
+  - accountId: 5b10a2844c20165700ede21g
+    displayName: Ada Lovelace
+    email: you@example.com
+
+projects:
+  - id: "10000"
+    key: TAP
+    name: 이슈탭
+    type: software
+
+statuses:
+  - id: "10000"
+    name: 해야 할 일
+    category: new
+  - id: "3"
+    name: 진행 중
+    category: indeterminate
+  - id: "10002"
+    name: 검토 중
+    category: indeterminate
+  - id: "10003"
+    name: 완료
+    category: done
+
+priorities:
+  - {id: "1", name: 가장 높음}
+  - {id: "2", name: 높음}
+  - {id: "3", name: 중간}
+  - {id: "4", name: 낮음}
+  - {id: "5", name: 가장 낮음}
+
+issueTypes:
+  - {id: "10003", name: 작업, hierarchyLevel: 0}
+  - {id: "10007", name: 버그, hierarchyLevel: 0}
+  - {id: "10000", name: 에픽, hierarchyLevel: 1}
+  - {id: "10004", name: 스토리, hierarchyLevel: 0}
+
+issues:
+  - id: "10001"
+    key: TAP-1
+    summary: 저장 시 편집기가 중단됨
+    description: flangewidget 이 저장할 때 패닉한다
+    type: "10007"
+    status: "3"
+    priority: "2"
+    reporter: 5b10a2844c20165700ede21g
+    project: TAP
+    created: "2026-07-01T10:00:00.000+0900"
+    updated: "2026-08-02T10:00:00.000+0900"
+    comments:
+      - id: "9001"
+        author: 5b10a2844c20165700ede21g
+        body: 재현되지 않음
+        created: "2026-07-02T10:00:00.000+0900"
+    history:
+      - id: h1
+        at: "2026-07-10T10:00:00.000+0900"
+        author: 5b10a2844c20165700ede21g
+        items:
+          - field: 상태
+            fieldId: status
+            from: "10000"
+            to: "3"
+  - id: "10002"
+    key: TAP-2
+    summary: 단축키 추가
+    type: "10003"
+    status: "10000"
+    reporter: 5b10a2844c20165700ede21g
+    project: TAP
+    created: "2026-07-05T10:00:00.000+0900"
+    updated: "2026-08-03T10:00:00.000+0900"
+
+spaces:
+  - key: DOCS
+    name: 문서
+    type: global
+    homepage: "20001"
+
+pages:
+  - id: "20001"
+    title: 랩 소개
+    space: DOCS
+    body: 상태 이름은 계정 언어로 온다. id 로 키하라.
+    when: "2026-08-05T11:31:32.815Z"
+    author: 5b10a2844c20165700ede21g

@@ -1,0 +1,74 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build and check
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+
+      - run: npm ci
+
+      - name: Secretscan
+        run: make secretscan
+
+      - name: Go vet
+        run: go vet ./...
+
+      - name: Frontend build
+        run: npm run build
+
+      - name: Go build
+        run: CGO_ENABLED=0 go build -trimpath -o /tmp/issuetap ./cmd/issuetap
+
+      - name: Go tests
+        run: go test ./... -count=1
+
+      - name: Frontend typecheck
+        run: npm run typecheck
+
+      - name: Scenario smoke
+        run: |
+          /tmp/issuetap scenario run examples/scenarios/locale-ko-name-trap.yaml
+          /tmp/issuetap scenario run examples/scenarios/credential-revoked.yaml
+          /tmp/issuetap scenario run examples/scenarios/confluence-401-stops-watch.yaml
+
+      - name: Checkout gadak (conformance)
+        uses: actions/checkout@v4
+        with:
+          repository: midagedev/gadak
+          path: gadak-src
+        continue-on-error: true
+
+      - name: Gadak conformance
+        if: hashFiles('gadak-src/cmd/gadak/main.go') != ''
+        env:
+          ISSUETAP_REQUIRE_GADAK: "1"
+          ISSUETAP_GADAK_SRC: ${{ github.workspace }}/gadak-src
+        run: go test ./internal/conformance -count=1 -timeout 180s

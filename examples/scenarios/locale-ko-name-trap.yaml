@@ -1,0 +1,35 @@
+name: locale-ko-name-trap
+description: >
+  Same data, Korean display names. A client that keys on "In Progress"
+  or "Task" gets zero rows; a client that keys on status id / category
+  or issue type id passes.
+fixture: ../fixtures/tiny.yaml
+dialect: cloud
+locale: ko
+assertions:
+  - name: status 3 is 진행 중
+    method: GET
+    path: /rest/api/3/status
+    auth: true
+    wantStatus: 200
+    wantContains: "진행 중"
+  - name: name-keyed JQL is empty
+    method: POST
+    path: /rest/api/3/search/jql
+    auth: true
+    body: {jql: 'status = "In Progress"', maxResults: 50}
+    wantStatus: 200
+    wantContains: '"issues":[]'
+  - name: id-keyed JQL finds the row
+    method: POST
+    path: /rest/api/3/search/jql
+    auth: true
+    body: {jql: "status = 3", maxResults: 50}
+    wantStatus: 200
+    wantContains: TAP-1
+  - name: type Task name is 작업
+    method: GET
+    path: /rest/api/3/issuetype
+    auth: true
+    wantStatus: 200
+    wantContains: "작업"

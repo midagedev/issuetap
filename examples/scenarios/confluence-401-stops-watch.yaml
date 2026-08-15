@@ -1,0 +1,28 @@
+name: confluence-401-stops-watch
+description: >
+  Concrete gadak bug this product exists to catch: a Confluence 401 failed
+  to stop the watch loop, so the client re-sent a guaranteed-401 request
+  every tick. A correct client treats /wiki 401 as a dead credential.
+fixture: ../fixtures/tiny.yaml
+dialect: cloud
+locale: en
+faults:
+  - name: wiki-401
+    status: 401
+    pathPrefix: /wiki/
+assertions:
+  - name: jira still works
+    method: GET
+    path: /rest/api/3/myself
+    auth: true
+    wantStatus: 200
+  - name: wiki space is 401
+    method: GET
+    path: /wiki/rest/api/space
+    auth: true
+    wantStatus: 401
+  - name: wiki search is 401
+    method: GET
+    path: /wiki/rest/api/content/search?cql=type=page
+    auth: true
+    wantStatus: 401

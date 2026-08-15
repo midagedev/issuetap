@@ -1,0 +1,26 @@
+{
+  "name": "issuetap",
+  "version": "0.1.0",
+  "description": "Local Atlassian testbed for Jira and Confluence clients.",
+  "private": true,
+  "license": "Apache-2.0",
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "typecheck": "svelte-check --tsconfig ./tsconfig.json"
+  },
+  "devDependencies": {
+    "@sveltejs/vite-plugin-svelte": "^5.0.3",
+    "@tsconfig/svelte": "^5.0.4",
+    "@types/node": "^22.10.2",
+    "svelte": "^5.36.0",
+    "svelte-check": "^4.2.2",
+    "typescript": "^5.8.3",
+    "vite": "^6.3.5"
+  }
+}

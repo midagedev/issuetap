@@ -1,0 +1,168 @@
+# Tiny fixture for unit tests and the gadak conformance happy path.
+# All emails are @example.com. All accountIds are the documented fake.
+seed: 1
+locale: en
+timezone: "+0900"
+
+users:
+  - accountId: 5b10a2844c20165700ede21g
+    displayName: Ada Lovelace
+    email: you@example.com
+    name: ada
+    key: ada
+  - accountId: 5b10a2844c20165700ede22g
+    displayName: Dana
+    email: dana@example.com
+    name: dana
+    key: dana
+
+projects:
+  - id: "10000"
+    key: TAP
+    name: Issuetap
+    type: software
+    style: classic
+
+statuses:
+  - id: "10000"
+    name: To Do
+    category: new
+  - id: "3"
+    name: In Progress
+    category: indeterminate
+  - id: "10003"
+    name: Done
+    category: done
+
+priorities:
+  - {id: "1", name: Highest}
+  - {id: "2", name: High}
+  - {id: "3", name: Medium}
+  - {id: "4", name: Low}
+  - {id: "5", name: Lowest}
+
+issueTypes:
+  - {id: "10003", name: Task, hierarchyLevel: 0}
+  - {id: "10007", name: Bug, hierarchyLevel: 0}
+  - {id: "10000", name: Epic, hierarchyLevel: 1}
+
+issues:
+  - id: "10001"
+    key: TAP-1
+    summary: Editor crashes on save
+    description: the flangewidget panics when saving
+    environment: macOS 15, build 4210
+    type: "10007"
+    status: "3"
+    priority: "2"
+    assignee: 5b10a2844c20165700ede22g
+    reporter: 5b10a2844c20165700ede21g
+    creator: 5b10a2844c20165700ede21g
+    project: TAP
+    parent: TAP-100
+    labels: [regression, editor]
+    components: [Core]
+    fixVersions: ["2026.8"]
+    versions: ["2026.7"]
+    duedate: "2026-08-20"
+    created: "2026-07-01T10:00:00.000+0900"
+    updated: "2026-08-02T10:00:00.000+0900"
+    comments:
+      - id: "9001"
+        author: 5b10a2844c20165700ede22g
+        body: cannot reproduce with commentonlytoken enabled
+        created: "2026-07-02T10:00:00.000+0900"
+        updated: "2026-07-02T10:00:00.000+0900"
+      - id: "9002"
+        author: 5b10a2844c20165700ede21g
+        body: still broken
+        created: "2026-07-03T10:00:00.000+0900"
+    attachments:
+      - id: "7001"
+        filename: crash.log
+        mimeType: text/plain
+        text: "panic: flangewidget"
+        author: 5b10a2844c20165700ede21g
+        created: "2026-07-02T10:00:00.000+0900"
+    links:
+      - type: Relates
+        outward: TAP-2
+    history:
+      - id: h1
+        at: "2026-07-10T10:00:00.000+0900"
+        author: 5b10a2844c20165700ede21g
+        items:
+          - field: status
+            fieldId: status
+            from: "10000"
+            to: "10003"
+      - id: h2
+        at: "2026-07-20T10:00:00.000+0900"
+        author: 5b10a2844c20165700ede21g
+        items:
+          - field: status
+            fieldId: status
+            from: "10003"
+            to: "3"
+      - id: h3
+        at: "2026-07-21T10:00:00.000+0900"
+        author: 5b10a2844c20165700ede21g
+        items:
+          - field: Assignee
+            fieldId: assignee
+            from: ""
+            fromString: ""
+            to: 5b10a2844c20165700ede22g
+            toString: Dana
+
+  - id: "10002"
+    key: TAP-2
+    summary: Add keyboard shortcut
+    type: "10003"
+    status: "10000"
+    reporter: 5b10a2844c20165700ede21g
+    project: TAP
+    created: "2026-07-05T10:00:00.000+0900"
+    updated: "2026-08-03T10:00:00.000+0900"
+
+  - id: "10003"
+    key: TAP-3
+    summary: Ship the locale trap docs
+    type: "10003"
+    status: "10003"
+    resolution: "10000"
+    reporter: 5b10a2844c20165700ede21g
+    project: TAP
+    created: "2026-07-08T10:00:00.000+0900"
+    updated: "2026-08-01T10:00:00.000+0900"
+    history:
+      - id: h4
+        at: "2026-07-30T10:00:00.000+0900"
+        author: 5b10a2844c20165700ede21g
+        items:
+          - field: status
+            fieldId: status
+            from: "10000"
+            to: "10003"
+
+spaces:
+  - id: "40001"
+    key: DOCS
+    name: Docs
+    type: global
+    homepage: "20001"
+
+pages:
+  - id: "20001"
+    title: Welcome to the lab
+    space: DOCS
+    version: 1
+    when: "2026-08-05T11:31:32.815Z"
+    author: 5b10a2844c20165700ede21g
+    body: Issuetap is a local Atlassian testbed. It is not an issue tracker.
+    labels: [intro]
+    comments:
+      - id: "30001"
+        author: 5b10a2844c20165700ede22g
+        body: noted
+        when: "2026-08-05T12:00:00.000Z"

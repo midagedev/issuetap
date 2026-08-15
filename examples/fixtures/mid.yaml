@@ -1,0 +1,72 @@
+# Mid-size fixture: two projects, generated history, enough rows to page.
+seed: 7
+locale: en
+timezone: "+0900"
+
+users:
+  - accountId: 5b10a2844c20165700ede21g
+    displayName: Ada Lovelace
+    email: you@example.com
+  - accountId: 5b10a2844c20165700ede22g
+    displayName: Dana
+    email: dana@example.com
+  - accountId: 5b10a2844c20165700ede23g
+    displayName: Sam
+    email: sam@example.com
+
+projects:
+  - {id: "10000", key: TAP, name: Issuetap, type: software}
+  - {id: "10001", key: OPS, name: Operations, type: software}
+
+statuses:
+  - {id: "10000", name: To Do, category: new}
+  - {id: "3", name: In Progress, category: indeterminate}
+  - {id: "10002", name: In Review, category: indeterminate}
+  - {id: "10003", name: Done, category: done}
+
+priorities:
+  - {id: "1", name: Highest}
+  - {id: "2", name: High}
+  - {id: "3", name: Medium}
+  - {id: "4", name: Low}
+  - {id: "5", name: Lowest}
+
+issueTypes:
+  - {id: "10003", name: Task, hierarchyLevel: 0}
+  - {id: "10007", name: Bug, hierarchyLevel: 0}
+  - {id: "10000", name: Epic, hierarchyLevel: 1}
+  - {id: "10004", name: Story, hierarchyLevel: 0}
+
+filters:
+  - id: "9000"
+    name: Open bugs
+    jql: 'project = TAP AND type = Bug AND status != Done'
+    favourite: true
+    owner: Ada Lovelace
+
+issues:
+  - {key: TAP-100, summary: "Epic: editor reliability", type: "10000", status: "3", priority: "2", reporter: 5b10a2844c20165700ede21g, project: TAP, created: "2026-06-01T09:00:00.000+0900", updated: "2026-08-10T09:00:00.000+0900"}
+  - {key: TAP-1, summary: "Editor crashes on save", type: "10007", status: "3", priority: "2", parent: TAP-100, reporter: 5b10a2844c20165700ede21g, assignee: 5b10a2844c20165700ede22g, project: TAP, created: "2026-07-01T10:00:00.000+0900", updated: "2026-08-02T10:00:00.000+0900", description: "panic in flangewidget", comments: [{body: "still broken", author: 5b10a2844c20165700ede21g, created: "2026-07-03T10:00:00.000+0900"}]}
+  - {key: TAP-2, summary: "Add keyboard shortcut", type: "10003", status: "10000", reporter: 5b10a2844c20165700ede23g, project: TAP, created: "2026-07-05T10:00:00.000+0900", updated: "2026-08-03T10:00:00.000+0900"}
+  - {key: TAP-3, summary: "Document the locale trap", type: "10004", status: "10003", resolution: "10000", reporter: 5b10a2844c20165700ede21g, project: TAP, created: "2026-07-08T10:00:00.000+0900", updated: "2026-08-01T10:00:00.000+0900"}
+  - {key: TAP-4, summary: "Pagination drifts under writes", type: "10007", status: "10002", priority: "1", reporter: 5b10a2844c20165700ede22g, project: TAP, created: "2026-07-09T10:00:00.000+0900", updated: "2026-08-04T10:00:00.000+0900"}
+  - {key: TAP-5, summary: "Slow comment fetch", type: "10003", status: "10000", reporter: 5b10a2844c20165700ede21g, project: TAP, created: "2026-07-10T10:00:00.000+0900", updated: "2026-08-05T10:00:00.000+0900"}
+  - {key: TAP-6, summary: "ADF mention does not notify", type: "10007", status: "3", priority: "3", reporter: 5b10a2844c20165700ede23g, assignee: 5b10a2844c20165700ede21g, project: TAP, created: "2026-07-11T10:00:00.000+0900", updated: "2026-08-06T10:00:00.000+0900"}
+  - {key: TAP-7, summary: "Changelog truncated", type: "10003", status: "3", reporter: 5b10a2844c20165700ede21g, project: TAP, created: "2026-07-12T10:00:00.000+0900", updated: "2026-08-07T10:00:00.000+0900"}
+  - {key: TAP-8, summary: "Attachment redirect", type: "10004", status: "10000", reporter: 5b10a2844c20165700ede22g, project: TAP, created: "2026-07-13T10:00:00.000+0900", updated: "2026-08-08T10:00:00.000+0900"}
+  - {key: TAP-9, summary: "Filter import", type: "10003", status: "10003", resolution: "10000", reporter: 5b10a2844c20165700ede21g, project: TAP, created: "2026-07-14T10:00:00.000+0900", updated: "2026-08-09T10:00:00.000+0900"}
+  - {key: TAP-10, summary: "Reconcile vanished key", type: "10007", status: "10000", reporter: 5b10a2844c20165700ede23g, project: TAP, created: "2026-07-15T10:00:00.000+0900", updated: "2026-08-10T10:00:00.000+0900"}
+  - {key: OPS-1, summary: "Rotate tokens in staging", type: "10003", status: "3", priority: "1", reporter: 5b10a2844c20165700ede22g, project: OPS, created: "2026-07-16T10:00:00.000+0900", updated: "2026-08-11T10:00:00.000+0900"}
+  - {key: OPS-2, summary: "On-call rotation page", type: "10004", status: "10000", reporter: 5b10a2844c20165700ede21g, project: OPS, created: "2026-07-17T10:00:00.000+0900", updated: "2026-08-12T10:00:00.000+0900"}
+  - {key: OPS-3, summary: "Pager false alarm", type: "10007", status: "10003", resolution: "10003", reporter: 5b10a2844c20165700ede23g, project: OPS, created: "2026-07-18T10:00:00.000+0900", updated: "2026-08-13T10:00:00.000+0900"}
+
+spaces:
+  - {key: DOCS, name: Docs, type: global, homepage: "20001"}
+  - {key: RUN, name: Runbooks, type: global, homepage: "20002"}
+
+pages:
+  - {id: "20001", title: Welcome, space: DOCS, body: "The lab instrument.", when: "2026-08-05T11:31:32.815Z", author: 5b10a2844c20165700ede21g, labels: [intro]}
+  - {id: "20002", title: On-call, space: RUN, body: "Page the person, not the channel.", when: "2026-08-06T11:31:32.815Z", author: 5b10a2844c20165700ede22g}
+  - {id: "20003", title: Locale trap, space: DOCS, body: "Never key on display names.", when: "2026-08-07T11:31:32.815Z", author: 5b10a2844c20165700ede21g, parent: "20001", comments: [{id: "30010", body: "also field catalog names", author: 5b10a2844c20165700ede22g, when: "2026-08-07T12:00:00.000Z"}]}
+  - {id: "20004", title: Rate limits, space: RUN, body: "Retry-After is in seconds.", when: "2026-08-08T11:31:32.815Z", author: 5b10a2844c20165700ede23g, parent: "20002"}
+  - {id: "20005", title: Watch must stop, space: DOCS, body: "A Confluence 401 must end the loop.", when: "2026-08-09T11:31:32.815Z", author: 5b10a2844c20165700ede21g}

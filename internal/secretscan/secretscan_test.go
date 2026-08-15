@@ -33,7 +33,11 @@ func TestScannerFindsFakeToken(t *testing.T) {
 	if err := os.WriteFile(p, []byte("token="+shape+"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	cmd := exec.Command("grep", "-E", "AT"+"ATT[A-Za-z0-9_\\-=+/]+", p)
+	// `-` last in the bracket, exactly as scripts/secretscan.sh writes it:
+	// GNU grep rejects `\-=` inside a bracket as a reverse range (exit 2),
+	// which is how the first version of this test failed on CI while
+	// passing under macOS BSD grep.
+	cmd := exec.Command("grep", "-E", "AT"+"ATT[A-Za-z0-9_=+/-]+", p)
 	if err := cmd.Run(); err != nil {
 		t.Fatalf("expected grep to find the fake token: %v", err)
 	}

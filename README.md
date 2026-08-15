@@ -1,11 +1,19 @@
 # Issuetap
 
+<p>
+  <a href="https://github.com/midagedev/issuetap/actions/workflows/ci.yml"><img src="https://github.com/midagedev/issuetap/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-blue" alt="Apache-2.0"></a>
+</p>
+
 Local, deterministic Atlassian-compatible server for developing and testing
 anything that talks to Jira and Confluence Cloud — plus a dashboard that
 shows what the client under test asked for and what it got.
 
 It is **not** an issue tracker. Nobody plans work in it. Issuetap exists so
-a client integration can be exercised without a real site.
+a client integration can be exercised without a real site. It is the third
+tool in the billtap / dogtap family of local test labs, born as the testbed
+for [gadak](https://github.com/midagedev/gadak) — whose `sync --full`
+completes against the fixtures in this repo.
 
 ## What You Get
 
@@ -59,7 +67,17 @@ apart from "my client is broken".
 
 ## Quick Start
 
-Requirements: Go 1.26+, Node.js 20+.
+Requirements: Go 1.26+ (Node.js 20+ only if you want the dashboard built).
+
+```bash
+go install github.com/midagedev/issuetap/cmd/issuetap@latest
+issuetap serve --fixture examples/fixtures/tiny.yaml
+```
+
+(A `go install` binary serves the full API; the dashboard ships only in a
+build that ran `npm run build` first — `/healthz` reports `ui` either way.)
+
+From a clone, with the dashboard:
 
 ```bash
 npm install

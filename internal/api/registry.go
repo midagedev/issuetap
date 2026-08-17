@@ -52,7 +52,7 @@ func Inventory() []Route {
 		{Method: "GET", Path: "/rest/api/{v}/filter/my", Level: Supported, Cloud: true, DC: true},
 		{Method: "GET", Path: "/rest/api/{v}/user/search", Level: Supported, Cloud: true, DC: true},
 		{Method: "GET", Path: "/rest/api/{v}/attachment/{id}", Level: Supported, Cloud: true, DC: true},
-		{Method: "GET", Path: "/rest/api/{v}/attachment/content/{id}", Level: Supported, Notes: "302 to /file/{uuid}/binary?name=", Cloud: true, DC: true},
+		{Method: "GET", Path: "/rest/api/{v}/attachment/content/{id}", Level: Supported, Notes: "302 to /file/{uuid}/binary?name=, which serves the stored bytes", Cloud: true, DC: true},
 
 		// Cloud + DC Jira writes (gadak write.go)
 		{Method: "POST", Path: "/rest/api/{v}/issue", Level: Supported, Cloud: true, DC: true},

@@ -79,6 +79,10 @@ Flags for serve:
   --email         accepted Basic user (empty = any)
   --token         accepted Basic password / Bearer PAT (empty = any non-empty)
   --scenario      scenario file to apply (faults + locale) on start
+  --persist       write-through state file: mutations are saved (debounced,
+                  atomic replace) and reloaded on restart. When the file
+                  exists it supersedes --fixture and the scenario fixture;
+                  delete it to reseed from the fixture.
 `)
 }
 
@@ -94,6 +98,7 @@ func cmdServe(args []string) error {
 	email := fs.String("email", cfg.Email, "accepted Basic user")
 	token := fs.String("token", cfg.Token, "accepted token")
 	scenario := fs.String("scenario", "", "scenario file to apply on start")
+	persist := fs.String("persist", cfg.Snapshot, "write-through persistence file (ISSUETAP_SNAPSHOT)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -112,7 +117,7 @@ func cmdServe(args []string) error {
 		}
 	})
 
-	st, eng, err := loadServeGraph(cfg, *scenario, localeFromCLI)
+	st, eng, err := loadServeGraph(cfg, *scenario, localeFromCLI, *persist)
 	if err != nil {
 		return err
 	}
@@ -134,22 +139,47 @@ func cmdServe(args []string) error {
 		_ = httpSrv.Shutdown(sh)
 	}()
 
-	fmt.Fprintf(os.Stderr, "issuetap listening on http://%s  dialect=%s locale=%s seed=%d fixture=%s\n",
-		cfg.Addr, cfg.Dialect.Kind, st.Locale(), st.Seed(), cfg.Fixture)
+	fmt.Fprintf(os.Stderr, "issuetap listening on http://%s  dialect=%s locale=%s seed=%d fixture=%s persist=%s\n",
+		cfg.Addr, cfg.Dialect.Kind, st.Locale(), st.Seed(), cfg.Fixture, persistStatus(*persist))
 	err = httpSrv.ListenAndServe()
 	if err == http.ErrServerClosed {
-		return nil
+		err = nil
+	}
+	// Flush write-through persistence after the listener is down.
+	if cerr := st.Close(); err == nil {
+		err = cerr
 	}
 	return err
 }
 
 // loadServeGraph is the serve bootstrap: New → Apply fixture → optional
-// scenario (faults + scenario locale). When localeFromCLI is true
+// scenario (faults + scenario locale). With persist set and an existing
+// state file, the persisted graph is loaded instead (it is by definition
+// a later state of the same fixture) and the scenario fixture is skipped;
+// scenario faults and locale still apply. When localeFromCLI is true
 // (--locale or ISSUETAP_LOCALE), that locale is applied last so it wins
 // over the fixture locale: field.
-func loadServeGraph(cfg config.Config, scenarioPath string, localeFromCLI bool) (*store.Store, *faults.Engine, error) {
-	st := store.New(store.Options{Seed: cfg.Seed, Locale: cfg.Locale})
-	if cfg.Fixture != "" {
+func loadServeGraph(cfg config.Config, scenarioPath string, localeFromCLI bool, persist string) (*store.Store, *faults.Engine, error) {
+	st := store.New(store.Options{
+		Seed: cfg.Seed, Locale: cfg.Locale,
+		PersistPath: persist, PersistDebounce: store.DefaultPersistDebounce,
+	})
+	loadedPersist := false
+	if persist != "" {
+		if _, err := os.Stat(persist); err == nil {
+			doc, err := fixtures.Load(persist)
+			if err != nil {
+				return nil, nil, fmt.Errorf("--persist %s: %w", persist, err)
+			}
+			if err := st.Apply(doc); err != nil {
+				return nil, nil, fmt.Errorf("--persist %s: %w", persist, err)
+			}
+			loadedPersist = true
+		} else if !os.IsNotExist(err) {
+			return nil, nil, fmt.Errorf("--persist %s: %w", persist, err)
+		}
+	}
+	if !loadedPersist && cfg.Fixture != "" {
 		doc, err := fixtures.Load(cfg.Fixture)
 		if err != nil {
 			return nil, nil, err
@@ -164,7 +194,7 @@ func loadServeGraph(cfg config.Config, scenarioPath string, localeFromCLI bool) 
 		if err != nil {
 			return nil, nil, err
 		}
-		if sc.Fixture != "" && cfg.Fixture == "" {
+		if sc.Fixture != "" && cfg.Fixture == "" && !loadedPersist {
 			doc, err := fixtures.Load(sc.Fixture)
 			if err != nil {
 				return nil, nil, err
@@ -364,4 +394,16 @@ func cmdDiagnose(args []string) error {
 
 func hasScheme(s string) bool {
 	return len(s) > 7 && (s[:7] == "http://" || (len(s) > 8 && s[:8] == "https://"))
+}
+
+// persistStatus describes the --persist state for the startup line: off,
+// armed (fresh file), or the path being continued.
+func persistStatus(persist string) string {
+	if persist == "" {
+		return "off"
+	}
+	if _, err := os.Stat(persist); err == nil {
+		return persist + " (continuing)"
+	}
+	return persist + " (new)"
 }

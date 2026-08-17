@@ -5,14 +5,20 @@ package store
 
 import (
 	"crypto/sha1"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io/fs"
+	"os"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/midagedev/issuetap/internal/adf"
 	"github.com/midagedev/issuetap/internal/clock"
@@ -55,15 +61,37 @@ type Store struct {
 	pages        map[string]*model.Page
 	pageComments map[string][]model.PageComment // parent content id
 	attachBytes  map[string][]byte
+	persist      *persistState
 }
 
 // Options seed a store.
 type Options struct {
 	Seed   int64
 	Locale locale.Code
+	// PersistPath arms write-through persistence: every mutation is
+	// debounced to this file (atomic temp-file + rename) and Open reloads
+	// it on startup, so a restarted process continues where it left off.
+	PersistPath string
+	// PersistDebounce is the quiet window before a write. Zero (with
+	// PersistPath set) means the 1s default; negative means write on every
+	// mutation.
+	PersistDebounce time.Duration
 }
 
-// New returns an empty store with default catalogs.
+// DefaultPersistDebounce is the write-through quiet window.
+const DefaultPersistDebounce = time.Second
+
+// persistState is the write-through engine. Owned by Store.mu.
+type persistState struct {
+	path     string
+	debounce time.Duration
+	timer    *time.Timer
+	dirty    bool
+	err      error // last write error; cleared by the next success
+}
+
+// New returns an empty store with default catalogs. When PersistPath is
+// set, mutations are persisted; use Open to also reload an existing file.
 func New(opt Options) *Store {
 	if opt.Locale == "" {
 		opt.Locale = locale.EN
@@ -86,8 +114,161 @@ func New(opt Options) *Store {
 		pageComments: map[string][]model.PageComment{},
 		attachBytes:  map[string][]byte{},
 	}
+	if opt.PersistPath != "" {
+		debounce := opt.PersistDebounce
+		if debounce == 0 {
+			debounce = DefaultPersistDebounce
+		}
+		if debounce < 0 {
+			debounce = 0
+		}
+		s.persist = &persistState{path: opt.PersistPath, debounce: debounce}
+	}
 	s.installDefaultCatalog()
 	return s
+}
+
+// Open is New plus startup reload: when the persistence file exists it is
+// loaded as the initial graph (in place of any fixture the caller would
+// have applied). A corrupt file is an error, never a silent empty store.
+func Open(opt Options) (*Store, error) {
+	st := New(opt)
+	if opt.PersistPath == "" {
+		return st, nil
+	}
+	_, statErr := os.Stat(opt.PersistPath)
+	if statErr != nil {
+		if errors.Is(statErr, fs.ErrNotExist) {
+			return st, nil
+		}
+		return nil, fmt.Errorf("persist: stat %s: %w", opt.PersistPath, statErr)
+	}
+	doc, err := fixtures.Load(opt.PersistPath)
+	if err != nil {
+		return nil, fmt.Errorf("persist: load %s: %w", opt.PersistPath, err)
+	}
+	if err := st.Apply(doc); err != nil {
+		return nil, fmt.Errorf("persist: apply %s: %w", opt.PersistPath, err)
+	}
+	st.mu.Lock()
+	if st.persist.timer != nil { // the load armed the debounce; disarm it
+		st.persist.timer.Stop()
+		st.persist.timer = nil
+	}
+	st.persist.dirty = false // the load itself is not a mutation
+	st.mu.Unlock()
+	return st, nil
+}
+
+// markDirtyLocked arms the debounced write. Called by every mutation.
+func (s *Store) markDirtyLocked() {
+	p := s.persist
+	if p == nil {
+		return
+	}
+	p.dirty = true
+	if p.timer != nil {
+		p.timer.Reset(p.debounce)
+		return
+	}
+	p.timer = time.AfterFunc(p.debounce, s.flushPersist)
+}
+
+// flushPersist is the timer callback: one atomic write when dirty.
+func (s *Store) flushPersist() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	p := s.persist
+	if p == nil {
+		return
+	}
+	p.timer = nil
+	if !p.dirty {
+		return
+	}
+	if err := s.writePersistLocked(); err != nil {
+		p.err = err // stays dirty; retried by the next mutation or Close
+		return
+	}
+	p.err = nil
+	p.dirty = false
+}
+
+func (s *Store) writePersistLocked() error {
+	b, err := fixtures.MarshalYAML(s.snapshotLocked())
+	if err != nil {
+		return err
+	}
+	return writeAtomic(s.persist.path, b)
+}
+
+// writeAtomic replaces path via same-directory temp file + rename so a
+// reader (or a crash) never sees a partial document.
+func writeAtomic(path string, b []byte) error {
+	dir := filepath.Dir(path)
+	tmp, err := os.CreateTemp(dir, "."+filepath.Base(path)+".tmp-")
+	if err != nil {
+		return err
+	}
+	name := tmp.Name()
+	defer os.Remove(name) // no-op once renamed
+	if _, err := tmp.Write(b); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if err := os.Chmod(name, 0o644); err != nil {
+		return err
+	}
+	return os.Rename(name, path)
+}
+
+// Flush writes pending mutations to the persistence file now (no-op when
+// persistence is not armed) and returns the write error, if any.
+func (s *Store) Flush() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	p := s.persist
+	if p == nil {
+		return nil
+	}
+	if p.timer != nil {
+		p.timer.Stop()
+		p.timer = nil
+	}
+	if !p.dirty {
+		return nil
+	}
+	if err := s.writePersistLocked(); err != nil {
+		p.err = err
+		return err
+	}
+	p.err = nil
+	p.dirty = false
+	return nil
+}
+
+// Close flushes pending mutations and stops the debounce timer. Safe to
+// call on a store without persistence.
+func (s *Store) Close() error {
+	return s.Flush()
+}
+
+// PersistErr is the last background (debounced) write error, for
+// embedders that want to poll disk health between flushes.
+func (s *Store) PersistErr() error {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.persist == nil {
+		return nil
+	}
+	return s.persist.err
 }
 
 func (s *Store) installDefaultCatalog() {
@@ -165,6 +346,7 @@ func (s *Store) SetLocale(c locale.Code) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.loc = c
+	s.markDirtyLocked()
 }
 
 // Seed is the determinism seed.
@@ -253,8 +435,107 @@ func (s *Store) Apply(doc fixtures.Doc) error {
 	for _, p := range doc.Pages {
 		s.putPage(p)
 	}
-	s.seedIssueSeqLocked()
+	s.seedSeqsLocked()
+	s.seedClockLocked()
+	s.markDirtyLocked()
 	return nil
+}
+
+// seedSeqsLocked continues every id sequence past the highest restored id
+// so post-restart mutations cannot collide with rows that came back from
+// a persistence file.
+func (s *Store) seedSeqsLocked() {
+	s.seedIssueSeqLocked()
+	maxC, maxA, maxH := 0, 0, 0
+	bumpComment := func(id string) {
+		n, err := strconv.Atoi(id)
+		if err != nil {
+			return
+		}
+		// Runtime ids: issue comments 90000+seq, page comments 30000+seq
+		// (both share seqComment). Authored ids outside those bands are
+		// left alone — they cannot be regenerated anyway.
+		if n > 90000 && n-90000 > maxC {
+			maxC = n - 90000
+		}
+		if n > 30000 && n < 40000 && n-30000 > maxC {
+			maxC = n - 30000
+		}
+	}
+	for _, iss := range s.issues {
+		for _, c := range iss.Comments {
+			bumpComment(c.ID)
+		}
+		for _, a := range iss.Attachments {
+			if n, err := strconv.Atoi(a.ID); err == nil && n > 70000 && n-70000 > maxA {
+				maxA = n - 70000
+			}
+		}
+		for _, h := range iss.Histories {
+			if n, err := strconv.Atoi(strings.TrimPrefix(h.ID, "h")); err == nil && n > maxH {
+				maxH = n
+			}
+		}
+	}
+	for _, cms := range s.pageComments {
+		for _, c := range cms {
+			bumpComment(c.ID)
+		}
+	}
+	if maxC > s.seqComment {
+		s.seqComment = maxC
+	}
+	if maxA > s.seqAttach {
+		s.seqAttach = maxA
+	}
+	if maxH > s.seqHist {
+		s.seqHist = maxH
+	}
+}
+
+// seedClockLocked jumps the deterministic clock past every timestamp in
+// the loaded graph. Without this, mutations after a persistence reload
+// would be stamped from the seed start again — earlier than rows that
+// already exist — and an `updated >=` delta sync (gadak) would skip them.
+// Pure function of the document, so determinism holds.
+func (s *Store) seedClockLocked() {
+	var max time.Time
+	see := func(stamp string) {
+		if stamp == "" {
+			return
+		}
+		for _, layout := range []string{model.JiraTime, time.RFC3339Nano, time.RFC3339} {
+			if t, err := time.Parse(layout, stamp); err == nil {
+				if t.After(max) {
+					max = t
+				}
+				return
+			}
+		}
+	}
+	for _, iss := range s.issues {
+		see(iss.Created)
+		see(iss.Updated)
+		for _, c := range iss.Comments {
+			see(c.Created)
+			see(c.Updated)
+		}
+		for _, a := range iss.Attachments {
+			see(a.Created)
+		}
+		for _, h := range iss.Histories {
+			see(h.Created)
+		}
+	}
+	for _, p := range s.pages {
+		see(p.When)
+		for _, c := range s.pageComments[p.ID] {
+			see(c.When)
+		}
+	}
+	if !max.IsZero() {
+		s.clk.Jump(max)
+	}
 }
 
 // seedIssueSeqLocked sets seqIssue from the highest existing numeric issue
@@ -420,7 +701,11 @@ func (s *Store) putIssue(in fixtures.Issue) error {
 		iss.Comments = append(iss.Comments, s.makeComment(c, created))
 	}
 	for _, a := range in.Attachments {
-		iss.Attachments = append(iss.Attachments, s.makeAttach(a, created))
+		att, err := s.makeAttach(a, created)
+		if err != nil {
+			return err
+		}
+		iss.Attachments = append(iss.Attachments, att)
 	}
 	for _, l := range in.Links {
 		iss.Links = append(iss.Links, model.IssueLink{TypeName: l.Type, InwardKey: l.Inward, OutwardKey: l.Outward})
@@ -451,7 +736,10 @@ func (s *Store) makeComment(c fixtures.Comment, fallback string) model.Comment {
 	}
 }
 
-func (s *Store) makeAttach(a fixtures.Attachment, fallback string) model.Attachment {
+// makeAttach restores an attachment row. Content precedence: dataBase64
+// (binary-safe), then text (readable inline), then a deterministic
+// placeholder so authored fixtures without content still serve bytes.
+func (s *Store) makeAttach(a fixtures.Attachment, fallback string) (model.Attachment, error) {
 	id := a.ID
 	if id == "" {
 		s.seqAttach++
@@ -461,8 +749,17 @@ func (s *Store) makeAttach(a fixtures.Attachment, fallback string) model.Attachm
 	if mime == "" {
 		mime = "text/plain"
 	}
-	body := []byte(a.Text)
-	if len(body) == 0 {
+	var body []byte
+	switch {
+	case a.DataBase64 != "":
+		b, err := base64.StdEncoding.DecodeString(a.DataBase64)
+		if err != nil {
+			return model.Attachment{}, fmt.Errorf("attachment %s (%s): dataBase64: %w", id, a.Filename, err)
+		}
+		body = b
+	case a.Text != "":
+		body = []byte(a.Text)
+	default:
 		body = []byte("issuetap fixture attachment " + a.Filename)
 	}
 	s.attachBytes[id] = body
@@ -471,7 +768,7 @@ func (s *Store) makeAttach(a fixtures.Attachment, fallback string) model.Attachm
 		ID: id, Filename: a.Filename, MimeType: mime, Size: int64(len(body)),
 		Author: *s.userOrDefault(a.Author), Created: first(a.Created, fallback),
 		MediaID: media,
-	}
+	}, nil
 }
 
 func (s *Store) makeHistory(h fixtures.History, iss *model.Issue) model.History {
@@ -748,6 +1045,24 @@ func normalizeFieldID(field string) string {
 func slugID(name string) string {
 	h := sha1.Sum([]byte(name))
 	return hex.EncodeToString(h[:4])
+}
+
+// readableText reports whether attachment bytes can snapshot as inline
+// `text` instead of base64: valid UTF-8 with no control characters beyond
+// tab/newline/carriage return.
+func readableText(b []byte) (string, bool) {
+	if !utf8.Valid(b) {
+		return "", false
+	}
+	for _, r := range string(b) {
+		if r == '\t' || r == '\n' || r == '\r' {
+			continue
+		}
+		if r < 0x20 || r == 0x7f {
+			return "", false
+		}
+	}
+	return string(b), true
 }
 
 func uuid5(id string) string {
@@ -1210,6 +1525,22 @@ func (s *Store) AttachmentBytes(id string) ([]byte, *model.Attachment) {
 	return b, nil
 }
 
+// AttachmentByMedia resolves the media UUID that /attachment/content
+// redirects to, so the download target can serve the stored bytes.
+func (s *Store) AttachmentByMedia(media string) ([]byte, *model.Attachment) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	for _, iss := range s.issues {
+		for i := range iss.Attachments {
+			if iss.Attachments[i].MediaID == media {
+				a := iss.Attachments[i]
+				return s.attachBytes[a.ID], &a
+			}
+		}
+	}
+	return nil, nil
+}
+
 // Transitions for an issue: every other status in the catalog. This is a
 // model, not a workflow engine.
 func (s *Store) Transitions(key string) []model.Transition {
@@ -1287,6 +1618,7 @@ func (s *Store) Transition(key, transitionID string) error {
 			To: to, ToString: s.displayFor("status", to),
 		}},
 	})
+	s.markDirtyLocked()
 	return nil
 }
 
@@ -1315,6 +1647,7 @@ func (s *Store) AddComment(key, authorID string, body []byte) (model.Comment, er
 	}
 	iss.Comments = append(iss.Comments, cm)
 	iss.Updated = now
+	s.markDirtyLocked()
 	return cm, nil
 }
 
@@ -1339,6 +1672,7 @@ func (s *Store) SetAssignee(key, accountID string) error {
 			To: accountID, ToString: s.displayFor("assignee", accountID),
 		}},
 	})
+	s.markDirtyLocked()
 	return nil
 }
 
@@ -1384,6 +1718,7 @@ func (s *Store) UpdateIssue(key string, fields, update map[string]any) error {
 		}
 	}
 	iss.Updated = clock.Format(s.clk.Tick())
+	s.markDirtyLocked()
 	return nil
 }
 
@@ -1535,6 +1870,7 @@ func (s *Store) CreateIssue(fields map[string]any) (*model.Issue, error) {
 		iss.Custom[k] = v
 	}
 	s.issues[key] = iss
+	s.markDirtyLocked()
 	return iss, nil
 }
 
@@ -1574,6 +1910,7 @@ func (s *Store) AddAttachment(key, filename, mime, authorID string, body []byte)
 	}
 	iss.Attachments = append(iss.Attachments, a)
 	iss.Updated = a.Created
+	s.markDirtyLocked()
 	return a, nil
 }
 
@@ -1645,6 +1982,12 @@ func IsNotFound(err error) bool {
 func (s *Store) Snapshot() fixtures.Doc {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
+	return s.snapshotLocked()
+}
+
+// snapshotLocked is Snapshot without re-locking, for the persistence path
+// which already holds the write lock.
+func (s *Store) snapshotLocked() fixtures.Doc {
 	d := fixtures.Doc{Seed: s.seed, Locale: string(s.loc)}
 	seenU := map[string]bool{}
 	for _, u := range s.users {
@@ -1684,7 +2027,7 @@ func (s *Store) Snapshot() fixtures.Doc {
 	}
 	sort.Strings(keys)
 	for _, k := range keys {
-		d.Issues = append(d.Issues, issueToFix(s.issues[k]))
+		d.Issues = append(d.Issues, s.issueToFix(s.issues[k]))
 	}
 	for _, sp := range s.spaces {
 		d.Spaces = append(d.Spaces, fixtures.Space{
@@ -1716,7 +2059,10 @@ func (s *Store) Snapshot() fixtures.Doc {
 	return d
 }
 
-func issueToFix(iss *model.Issue) fixtures.Issue {
+// issueToFix includes attachment content: printable UTF-8 stays inline as
+// `text` so the snapshot remains a document a person can read; anything
+// binary goes out as `dataBase64`. Both load back through makeAttach.
+func (s *Store) issueToFix(iss *model.Issue) fixtures.Issue {
 	out := fixtures.Issue{
 		ID: iss.ID, Key: iss.Key, Summary: iss.Summary,
 		Description: iss.DescriptionText, Environment: iss.EnvironmentText,
@@ -1741,10 +2087,18 @@ func issueToFix(iss *model.Issue) fixtures.Issue {
 		})
 	}
 	for _, a := range iss.Attachments {
-		out.Attachments = append(out.Attachments, fixtures.Attachment{
+		fa := fixtures.Attachment{
 			ID: a.ID, Filename: a.Filename, MimeType: a.MimeType,
 			Author: a.Author.AccountID, Created: a.Created,
-		})
+		}
+		if body, ok := s.attachBytes[a.ID]; ok && len(body) > 0 {
+			if text, readable := readableText(body); readable {
+				fa.Text = text
+			} else {
+				fa.DataBase64 = base64.StdEncoding.EncodeToString(body)
+			}
+		}
+		out.Attachments = append(out.Attachments, fa)
 	}
 	for _, l := range iss.Links {
 		out.Links = append(out.Links, fixtures.Link{Type: l.TypeName, Inward: l.InwardKey, Outward: l.OutwardKey})

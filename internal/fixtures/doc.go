@@ -127,12 +127,13 @@ type Comment struct {
 }
 
 type Attachment struct {
-	ID       string `json:"id,omitempty" yaml:"id,omitempty"`
-	Filename string `json:"filename" yaml:"filename"`
-	MimeType string `json:"mimeType,omitempty" yaml:"mimeType,omitempty"`
-	Text     string `json:"text,omitempty" yaml:"text,omitempty"` // in-memory content
-	Author   string `json:"author,omitempty" yaml:"author,omitempty"`
-	Created  string `json:"created,omitempty" yaml:"created,omitempty"`
+	ID         string `json:"id,omitempty" yaml:"id,omitempty"`
+	Filename   string `json:"filename" yaml:"filename"`
+	MimeType   string `json:"mimeType,omitempty" yaml:"mimeType,omitempty"`
+	Text       string `json:"text,omitempty" yaml:"text,omitempty"`             // readable inline content (printable UTF-8)
+	DataBase64 string `json:"dataBase64,omitempty" yaml:"dataBase64,omitempty"` // binary content, std base64
+	Author     string `json:"author,omitempty" yaml:"author,omitempty"`
+	Created    string `json:"created,omitempty" yaml:"created,omitempty"`
 }
 
 type Link struct {

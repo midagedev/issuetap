@@ -1,7 +1,8 @@
-// Package issuetap embeds the built web UI so a release is one self-contained
-// binary. `npm run build` writes web assets to dist/app before `go build`;
-// without that step the embed carries only the committed placeholder and
-// WebUI reports ok=false.
+// Package issuetap is the public embedding contract (임베딩용 공개 계약)
+// for running the testbed in-process — see NewEmbedded — and embeds the
+// built web UI so a release is one self-contained binary. `npm run build`
+// writes web assets to dist/app before `go build`; without that step the
+// embed carries only the committed placeholder and WebUI reports ok=false.
 package issuetap
 
 import (

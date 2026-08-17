@@ -42,6 +42,19 @@ func (c *Clock) Tick() time.Time {
 	return c.now
 }
 
+// Jump moves the clock to t when t is later than the current instant, so
+// records created after a fixture (or persistence) load are stamped
+// later than every loaded row. Earlier t is ignored — a document is a
+// pure function of its own stamps, so determinism holds.
+func (c *Clock) Jump(t time.Time) {
+	if c == nil {
+		return
+	}
+	if t.After(c.now) {
+		c.now = t
+	}
+}
+
 // Format is the Jira Cloud timestamp layout.
 func Format(t time.Time) string {
 	return t.Format("2006-01-02T15:04:05.000-0700")

@@ -232,9 +232,23 @@ func (s *Server) handleAvatar(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleMediaFile(w http.ResponseWriter, r *http.Request) {
-	// The redirect target for attachment content. Body is empty on purpose:
-	// gadak reads Location, it does not download.
+	// The redirect target for attachment content: /file/{uuid}/binary.
+	// Serves the stored bytes so a client that follows the 302 from
+	// /attachment/content/{id} gets the uploaded file back.
+	rest := strings.TrimPrefix(r.URL.Path, "/file/")
+	media, _, _ := strings.Cut(rest, "/")
+	body, a := s.st.AttachmentByMedia(media)
+	if a == nil {
+		http.NotFound(w, r)
+		return
+	}
+	mime := a.MimeType
+	if mime == "" {
+		mime = "application/octet-stream"
+	}
+	w.Header().Set("Content-Type", mime)
 	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(body)
 }
 
 func (s *Server) serveUI(w http.ResponseWriter, r *http.Request) {

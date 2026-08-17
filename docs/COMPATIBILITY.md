@@ -69,7 +69,7 @@ Jira layout `2006-01-02T15:04:05.000-0700`.
 | Edit meta | `GET /issue/{key}/editmeta` | Partial | summary / labels / assignee / priority. |
 | Create meta | `GET /issue/createmeta` | Partial | projects + types. |
 | Writes | `POST /issue`, `PUT /issue/{key}`, `POST …/comment`, `PUT …/assignee`, `POST …/attachments` | Supported | Mutate the in-memory graph. |
-| Attachments | `GET /attachment/{id}`, `GET /attachment/content/{id}` | Supported | 302 to `/file/{uuid}/binary?name=`. |
+| Attachments | `GET /attachment/{id}`, `GET /attachment/content/{id}` | Supported | 302 to `/file/{uuid}/binary?name=`; the target serves the stored bytes. |
 | Spaces | `GET /wiki/rest/api/space`, `GET /wiki/rest/api/space/{key}` | Supported | |
 | CQL | `GET /wiki/rest/api/content/search` | Supported | `space`, `type`, `lastModified`; `_links.next`. |
 | Page | `GET /wiki/rest/api/content/{id}` | Supported | `body.atlas_doc_format`. |

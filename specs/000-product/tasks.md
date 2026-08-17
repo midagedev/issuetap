@@ -10,3 +10,6 @@
 - [x] Gadak conformance test
 - [x] Family docs and CI
 - [x] Secretscan
+- [x] Public embedding surface (`issuetap.NewEmbedded`, root package)
+- [x] Write-through persistence (`--persist`, debounced atomic writes, restart reload)
+- [x] Attachment bytes survive snapshot/restore (`text` inline / `dataBase64`)

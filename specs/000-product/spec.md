@@ -10,7 +10,10 @@ Issuetap is a local, deterministic Atlassian-compatible server for
 developing and testing Jira and Confluence clients. It serves Cloud v3
 (complete for gadak's call set) and a Data Center v2 read path, with
 fixture apply/snapshot, first-class fault scenarios, localized display
-names, a Svelte dashboard, and a diagnostics bundle.
+names, a Svelte dashboard, and a diagnostics bundle. The root package
+`issuetap` is a public embedding contract (in-process handler with
+opt-in write-through persistence) so another Go program can use it as
+its origin store.
 
 It is not an issue tracker.
 
@@ -37,6 +40,14 @@ empty. `status = 3` hits.
 
 A scenario returns 401 from request N. The client stops. A client that
 retries forever fails the scenario.
+
+### 4. Embed, mutate, restart
+
+A Go program embeds issuetap (`issuetap.NewEmbedded`), points a client at
+its handler, creates data, and shuts down. On the next start with the
+same `PersistPath` the data is back: issues, comments, attachment bytes.
+Ids continue (no reuse) and new mutations are stamped after the restored
+rows, so an `updated >=` delta sync does not skip them.
 
 ## Non-goals
 

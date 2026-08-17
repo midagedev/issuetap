@@ -10,3 +10,6 @@
 7. Svelte dashboard + diagnose zip.
 8. Gadak conformance test as the acceptance gate.
 9. Family docs, Makefile, CI, secretscan.
+10. Public embedding surface (root package `issuetap`) + opt-in
+    write-through persistence + attachment bytes that survive
+    snapshot/restore.

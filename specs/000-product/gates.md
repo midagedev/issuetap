@@ -9,4 +9,5 @@
 | Web build | `npm run build` | `dist/app/index.html` exists |
 | Secretscan | `make secretscan` | `secretscan: clean` |
 | Gadak | `make test-gadak` | mirror matches fixture; 401 stops; 429 retries |
+| Embed + persist | `go test . ./internal/store -run 'TestEmbedded|TestMutationSurvivesRestart|TestAttachmentBytesSurvive' -count=1` | exit 0 |
 | Sibling trees | `git -C ../gadak status --short` (and billtap, dogtap) | empty |

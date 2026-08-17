@@ -116,7 +116,7 @@ go run ./cmd/issuetap scenario run examples/scenarios/locale-ko-name-trap.yaml
 ## Commands
 
 ```text
-issuetap serve [--addr] [--fixture] [--locale] [--dialect] [--seed] [--scenario]
+issuetap serve [--addr] [--fixture] [--locale] [--dialect] [--seed] [--scenario] [--persist <file>]
 issuetap fixtures apply <file>
 issuetap fixtures snapshot [--addr host:port] [--format yaml|json]
 issuetap scenario run <file> [--report path]
@@ -126,6 +126,26 @@ issuetap diagnose [--addr host:port] [--out file.zip]
 `fixtures apply` loads the file into a throwaway store and prints counts
 (it does not change a running `serve`; that is `POST /api/fixtures/apply`).
 `fixtures snapshot` prints `GET /api/fixtures/snapshot` from a running server.
+`--persist <file>` keeps mutations across restarts: writes are debounced and
+atomic, the file is reloaded on the next start (and then supersedes
+`--fixture`; delete it to reseed).
+
+## Embedding (Go)
+
+The root package is a public embedding contract — run the whole testbed
+in-process:
+
+```go
+e, err := issuetap.NewEmbedded(issuetap.EmbeddedConfig{
+	FixturePath: "fixture.yaml",
+	PersistPath: "state.yaml", // optional: survive restarts
+})
+defer e.Close()
+http.Handle("/", e) // full surface: /rest/api/3, /wiki, /api, dashboard
+```
+
+No internal package is imported; `Embedded` is an `http.Handler` with
+`Snapshot()` for export.
 
 ## Documentation
 

@@ -4,6 +4,7 @@ package conformance
 // and sync. If this fails, the emulation is not real.
 
 import (
+	"bytes"
 	"database/sql"
 	"encoding/json"
 	"net"
@@ -246,20 +247,35 @@ func TestGadakBackoffOn429(t *testing.T) {
 // the server's ordering (issuetap answers descending; the mirror stores and
 // reads ascending).
 func TestGadakMirrorsPageVersionHistory(t *testing.T) {
+	src := gadakSrc(t)
+	// CI checks out gadak's main, a moving target, and this capability had to
+	// ship here before gadak could consume it — so at the moment issuetap
+	// lands, gadak's main necessarily predates it. Skipping on "this gadak has
+	// no page_versions migration at all" is what makes that ordering legal
+	// without giving up the gate: a current gadak that stopped collecting
+	// still has the table, so it runs and fails.
+	schema, err := os.ReadFile(filepath.Join(src, "internal", "store", "schema.go"))
+	if err != nil {
+		t.Fatalf("read gadak schema: %v", err)
+	}
+	if !bytes.Contains(schema, []byte("page_versions")) {
+		t.Skipf("gadak at %s predates page_versions; nothing to conform to yet", src)
+	}
+
 	bin := buildGadak(t)
 	root := repoRoot(t)
 
 	// A dedicated fixture: tiny.yaml is shared by six test files, and this
 	// needs a multi-version page. Derive it rather than editing the original.
-	src, err := os.ReadFile(filepath.Join(root, "examples/fixtures/tiny.yaml"))
+	fixtureSrc, err := os.ReadFile(filepath.Join(root, "examples/fixtures/tiny.yaml"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	const anchor = "    space: DOCS\n    version: 1\n"
-	if !strings.Contains(string(src), anchor) {
+	if !strings.Contains(string(fixtureSrc), anchor) {
 		t.Fatalf("tiny.yaml page anchor not found; update this test to match the fixture:\n%q", anchor)
 	}
-	withVersions := strings.Replace(string(src), anchor, "    space: DOCS\n"+
+	withVersions := strings.Replace(string(fixtureSrc), anchor, "    space: DOCS\n"+
 		"    version: 3\n"+
 		"    versions:\n"+
 		"      - number: 1\n"+

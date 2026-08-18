@@ -17,20 +17,20 @@ import (
 
 // Doc is the on-disk fixture.
 type Doc struct {
-	Seed       int64            `json:"seed,omitempty" yaml:"seed,omitempty"`
-	Locale     string           `json:"locale,omitempty" yaml:"locale,omitempty"`
-	Timezone   string           `json:"timezone,omitempty" yaml:"timezone,omitempty"`
-	Users      []User           `json:"users,omitempty" yaml:"users,omitempty"`
-	Projects   []Project        `json:"projects,omitempty" yaml:"projects,omitempty"`
-	Statuses   []Status         `json:"statuses,omitempty" yaml:"statuses,omitempty"`
-	Priorities []Priority       `json:"priorities,omitempty" yaml:"priorities,omitempty"`
-	IssueTypes []IssueType      `json:"issueTypes,omitempty" yaml:"issueTypes,omitempty"`
-	Resolutions []Resolution    `json:"resolutions,omitempty" yaml:"resolutions,omitempty"`
-	Fields     []Field          `json:"fields,omitempty" yaml:"fields,omitempty"`
-	Filters    []Filter         `json:"filters,omitempty" yaml:"filters,omitempty"`
-	Issues     []Issue          `json:"issues,omitempty" yaml:"issues,omitempty"`
-	Spaces     []Space          `json:"spaces,omitempty" yaml:"spaces,omitempty"`
-	Pages      []Page           `json:"pages,omitempty" yaml:"pages,omitempty"`
+	Seed        int64        `json:"seed,omitempty" yaml:"seed,omitempty"`
+	Locale      string       `json:"locale,omitempty" yaml:"locale,omitempty"`
+	Timezone    string       `json:"timezone,omitempty" yaml:"timezone,omitempty"`
+	Users       []User       `json:"users,omitempty" yaml:"users,omitempty"`
+	Projects    []Project    `json:"projects,omitempty" yaml:"projects,omitempty"`
+	Statuses    []Status     `json:"statuses,omitempty" yaml:"statuses,omitempty"`
+	Priorities  []Priority   `json:"priorities,omitempty" yaml:"priorities,omitempty"`
+	IssueTypes  []IssueType  `json:"issueTypes,omitempty" yaml:"issueTypes,omitempty"`
+	Resolutions []Resolution `json:"resolutions,omitempty" yaml:"resolutions,omitempty"`
+	Fields      []Field      `json:"fields,omitempty" yaml:"fields,omitempty"`
+	Filters     []Filter     `json:"filters,omitempty" yaml:"filters,omitempty"`
+	Issues      []Issue      `json:"issues,omitempty" yaml:"issues,omitempty"`
+	Spaces      []Space      `json:"spaces,omitempty" yaml:"spaces,omitempty"`
+	Pages       []Page       `json:"pages,omitempty" yaml:"pages,omitempty"`
 }
 
 type User struct {
@@ -95,8 +95,8 @@ type Issue struct {
 	Summary     string         `json:"summary" yaml:"summary"`
 	Description string         `json:"description,omitempty" yaml:"description,omitempty"`
 	Environment string         `json:"environment,omitempty" yaml:"environment,omitempty"`
-	Type        string         `json:"type,omitempty" yaml:"type,omitempty"`       // id or name
-	Status      string         `json:"status,omitempty" yaml:"status,omitempty"`   // id or name
+	Type        string         `json:"type,omitempty" yaml:"type,omitempty"`     // id or name
+	Status      string         `json:"status,omitempty" yaml:"status,omitempty"` // id or name
 	Priority    string         `json:"priority,omitempty" yaml:"priority,omitempty"`
 	Assignee    string         `json:"assignee,omitempty" yaml:"assignee,omitempty"`
 	Reporter    string         `json:"reporter,omitempty" yaml:"reporter,omitempty"`
@@ -143,10 +143,10 @@ type Link struct {
 }
 
 type History struct {
-	ID      string        `json:"id,omitempty" yaml:"id,omitempty"`
-	At      string        `json:"at" yaml:"at"`
-	Author  string        `json:"author,omitempty" yaml:"author,omitempty"`
-	Items   []HistoryItem `json:"items" yaml:"items"`
+	ID     string        `json:"id,omitempty" yaml:"id,omitempty"`
+	At     string        `json:"at" yaml:"at"`
+	Author string        `json:"author,omitempty" yaml:"author,omitempty"`
+	Items  []HistoryItem `json:"items" yaml:"items"`
 }
 
 type HistoryItem struct {
@@ -167,18 +167,32 @@ type Space struct {
 }
 
 type Page struct {
-	ID        string        `json:"id,omitempty" yaml:"id,omitempty"`
-	Type      string        `json:"type,omitempty" yaml:"type,omitempty"`
-	Status    string        `json:"status,omitempty" yaml:"status,omitempty"`
-	Title     string        `json:"title" yaml:"title"`
-	Space     string        `json:"space" yaml:"space"`
-	Version   int           `json:"version,omitempty" yaml:"version,omitempty"`
-	When      string        `json:"when,omitempty" yaml:"when,omitempty"`
-	Author    string        `json:"author,omitempty" yaml:"author,omitempty"`
-	Body      string        `json:"body,omitempty" yaml:"body,omitempty"`
-	Labels    []string      `json:"labels,omitempty" yaml:"labels,omitempty"`
-	Parent    string        `json:"parent,omitempty" yaml:"parent,omitempty"`
-	Comments  []PageComment `json:"comments,omitempty" yaml:"comments,omitempty"`
+	ID       string        `json:"id,omitempty" yaml:"id,omitempty"`
+	Type     string        `json:"type,omitempty" yaml:"type,omitempty"`
+	Status   string        `json:"status,omitempty" yaml:"status,omitempty"`
+	Title    string        `json:"title" yaml:"title"`
+	Space    string        `json:"space" yaml:"space"`
+	Version  int           `json:"version,omitempty" yaml:"version,omitempty"`
+	When     string        `json:"when,omitempty" yaml:"when,omitempty"`
+	Author   string        `json:"author,omitempty" yaml:"author,omitempty"`
+	Body     string        `json:"body,omitempty" yaml:"body,omitempty"`
+	Labels   []string      `json:"labels,omitempty" yaml:"labels,omitempty"`
+	Parent   string        `json:"parent,omitempty" yaml:"parent,omitempty"`
+	Comments []PageComment `json:"comments,omitempty" yaml:"comments,omitempty"`
+	// Versions is the page's Confluence version history (message included).
+	// Omitted on an authored fixture: Apply synthesizes one row from
+	// version/when/author so GET /version still has a current stamp.
+	Versions []PageVersion `json:"versions,omitempty" yaml:"versions,omitempty"`
+}
+
+// PageVersion is one historical version of a wiki page. message is the
+// editor's "what changed" note and must survive snapshot/persist.
+type PageVersion struct {
+	Number    int    `json:"number" yaml:"number"`
+	When      string `json:"when,omitempty" yaml:"when,omitempty"`
+	Author    string `json:"author,omitempty" yaml:"author,omitempty"`
+	Message   string `json:"message,omitempty" yaml:"message,omitempty"`
+	MinorEdit bool   `json:"minorEdit,omitempty" yaml:"minorEdit,omitempty"`
 }
 
 type PageComment struct {

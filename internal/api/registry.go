@@ -67,13 +67,17 @@ func Inventory() []Route {
 		{Method: "GET", Path: "/wiki/rest/api/space/{key}", Level: Supported, Cloud: true, DC: false},
 		{Method: "GET", Path: "/wiki/rest/api/content/search", Level: Supported, Notes: "CQL; _links.next cursor", Cloud: true, DC: false},
 		{Method: "GET", Path: "/wiki/rest/api/content/{id}", Level: Supported, Notes: "expand=body.atlas_doc_format,version,space,ancestors,metadata.labels", Cloud: true, DC: false},
+		{Method: "GET", Path: "/wiki/rest/api/content/{id}/version", Level: Supported, Notes: "newest-first (number desc); start/limit; _links.next cursor like content/search", Cloud: true, DC: false},
 		{Method: "GET", Path: "/wiki/rest/api/content/{id}/child/comment", Level: Supported, Cloud: true, DC: false},
+		{Method: "POST", Path: "/wiki/rest/api/content", Level: Supported, Notes: "create page; body.atlas_doc_format.value is an ADF JSON string; version 1", Cloud: true, DC: false},
+		{Method: "PUT", Path: "/wiki/rest/api/content/{id}", Level: Supported, Notes: "version.number must equal current+1 or 409; version.message is stored on the new history row", Cloud: true, DC: false},
 
 		// Confluence DC (read path under context)
 		{Method: "GET", Path: "/rest/api/space", Level: Partial, Notes: "DC context path; body.storage", Cloud: false, DC: true},
 		{Method: "GET", Path: "/rest/api/space/{key}", Level: Partial, Cloud: false, DC: true},
 		{Method: "GET", Path: "/rest/api/content/search", Level: Partial, Cloud: false, DC: true},
 		{Method: "GET", Path: "/rest/api/content/{id}", Level: Partial, Cloud: false, DC: true},
+		{Method: "GET", Path: "/rest/api/content/{id}/version", Level: Partial, Notes: "DC context path; same newest-first list as Cloud", Cloud: false, DC: true},
 		{Method: "GET", Path: "/rest/api/content/{id}/child/comment", Level: Partial, Cloud: false, DC: true},
 
 		// Known unimplemented — must not 404

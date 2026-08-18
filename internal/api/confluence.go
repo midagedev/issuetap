@@ -1,11 +1,14 @@
 package api
 
 import (
+	"encoding/json"
+	"io"
 	"net/http"
 	"strconv"
 	"strings"
 
 	"github.com/midagedev/issuetap/internal/model"
+	"github.com/midagedev/issuetap/internal/store"
 )
 
 func (s *Server) handleConfluence(w http.ResponseWriter, r *http.Request, path string) {
@@ -23,7 +26,9 @@ func (s *Server) handleConfluence(w http.ResponseWriter, r *http.Request, path s
 		s.getSpace(w, r, strings.TrimPrefix(suffix, "/space/"))
 	case r.Method == http.MethodGet && suffix == "/content/search":
 		s.getContentSearch(w, r)
-	case r.Method == http.MethodGet && strings.HasPrefix(suffix, "/content/"):
+	case r.Method == http.MethodPost && (suffix == "/content" || suffix == "/content/"):
+		s.postContent(w, r)
+	case strings.HasPrefix(suffix, "/content/"):
 		s.handleContent(w, r, strings.TrimPrefix(suffix, "/content/"))
 	default:
 		writeUnsupported(w, r.Method, r.URL.Path)
@@ -135,15 +140,35 @@ func (s *Server) getContentSearch(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleContent(w http.ResponseWriter, r *http.Request, rest string) {
 	id, extra, _ := strings.Cut(rest, "/")
 	id = strings.TrimSpace(id)
+	extra = strings.Trim(extra, "/")
 	if extra == "child/comment" || strings.HasPrefix(extra, "child/comment") {
+		if r.Method != http.MethodGet {
+			writeUnsupported(w, r.Method, r.URL.Path)
+			return
+		}
 		s.getChildComments(w, r, id)
+		return
+	}
+	if extra == "version" {
+		if r.Method != http.MethodGet {
+			writeUnsupported(w, r.Method, r.URL.Path)
+			return
+		}
+		s.getContentVersions(w, r, id)
 		return
 	}
 	if extra != "" {
 		writeUnsupported(w, r.Method, r.URL.Path)
 		return
 	}
-	s.getPage(w, r, id)
+	switch r.Method {
+	case http.MethodGet:
+		s.getPage(w, r, id)
+	case http.MethodPut:
+		s.putContent(w, r, id)
+	default:
+		writeUnsupported(w, r.Method, r.URL.Path)
+	}
 }
 
 func (s *Server) getPage(w http.ResponseWriter, r *http.Request, id string) {
@@ -205,12 +230,12 @@ func (s *Server) wikiBase(r *http.Request) string {
 
 func (s *Server) pageHitJSON(r *http.Request, p model.Page, expand string) map[string]any {
 	out := map[string]any{
-		"id":     p.ID,
-		"type":   firstNonEmpty(p.Type, "page"),
-		"status": firstNonEmpty(p.Status, "current"),
-		"title":  p.Title,
-		"space":  s.spaceRef(p.SpaceKey),
-		"version": s.versionJSON(p.Version, p.When, p.AuthorID),
+		"id":      p.ID,
+		"type":    firstNonEmpty(p.Type, "page"),
+		"status":  firstNonEmpty(p.Status, "current"),
+		"title":   p.Title,
+		"space":   s.spaceRef(p.SpaceKey),
+		"version": s.pageVersionJSON(currentPageVersion(p)),
 		"_links": map[string]any{
 			"webui": firstNonEmpty(p.WebUI, "/spaces/"+p.SpaceKey+"/pages/"+p.ID),
 		},
@@ -300,14 +325,166 @@ func (s *Server) spaceRef(key string) map[string]any {
 }
 
 func (s *Server) versionJSON(n int, when, authorID string) map[string]any {
-	if n <= 0 {
-		n = 1
+	return s.pageVersionJSON(model.PageVersion{Number: n, When: when, AuthorID: authorID})
+}
+
+func (s *Server) pageVersionJSON(v model.PageVersion) map[string]any {
+	if v.Number <= 0 {
+		v.Number = 1
 	}
 	by := map[string]any{}
-	if u := s.st.User(authorID); u != nil {
+	if u := s.st.User(v.AuthorID); u != nil {
 		by = s.userJSON(*u)
-	} else if authorID != "" {
-		by = map[string]any{"accountId": authorID, "displayName": authorID}
+	} else if v.AuthorID != "" {
+		by = map[string]any{"accountId": v.AuthorID, "displayName": v.AuthorID}
 	}
-	return map[string]any{"number": n, "when": when, "by": by}
+	return map[string]any{
+		"number":    v.Number,
+		"when":      v.When,
+		"by":        by,
+		"message":   v.Message,
+		"minorEdit": v.MinorEdit,
+	}
+}
+
+func currentPageVersion(p model.Page) model.PageVersion {
+	for i := len(p.Versions) - 1; i >= 0; i-- {
+		if p.Version <= 0 || p.Versions[i].Number == p.Version {
+			return p.Versions[i]
+		}
+	}
+	return model.PageVersion{Number: p.Version, When: p.When, AuthorID: p.AuthorID}
+}
+
+type wikiContentWrite struct {
+	Type  string `json:"type"`
+	Title string `json:"title"`
+	Space *struct {
+		Key string `json:"key"`
+	} `json:"space"`
+	Ancestors []struct {
+		ID string `json:"id"`
+	} `json:"ancestors"`
+	Version *struct {
+		Number    int    `json:"number"`
+		Message   string `json:"message"`
+		MinorEdit bool   `json:"minorEdit"`
+	} `json:"version"`
+	Body struct {
+		AtlasDocFormat *struct {
+			Value json.RawMessage `json:"value"`
+		} `json:"atlas_doc_format"`
+	} `json:"body"`
+}
+
+func (b wikiContentWrite) write() store.PageWrite {
+	in := store.PageWrite{Title: b.Title}
+	if b.Space != nil {
+		in.SpaceKey = b.Space.Key
+	}
+	if len(b.Ancestors) > 0 {
+		in.ParentID = b.Ancestors[0].ID
+	}
+	if b.Version != nil {
+		in.Next = b.Version.Number
+		in.Message = b.Version.Message
+		in.MinorEdit = b.Version.MinorEdit
+	}
+	if b.Body.AtlasDocFormat != nil {
+		in.BodyADF = b.Body.AtlasDocFormat.Value
+	}
+	return in
+}
+
+func (s *Server) postContent(w http.ResponseWriter, r *http.Request) {
+	var body wikiContentWrite
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil && err != io.EOF {
+		writeWikiError(w, http.StatusBadRequest, "Invalid request body")
+		return
+	}
+	if body.Type != "" && body.Type != "page" {
+		writeWikiError(w, http.StatusBadRequest, "type must be page")
+		return
+	}
+	in := body.write()
+	in.AuthorID = s.identity(r).AccountID
+	pg, err := s.st.CreatePage(in)
+	if err != nil {
+		writeWikiError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, s.pageFullJSON(r, *pg, r.URL.Query().Get("expand")))
+}
+
+func (s *Server) putContent(w http.ResponseWriter, r *http.Request, id string) {
+	var body wikiContentWrite
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil && err != io.EOF {
+		writeWikiError(w, http.StatusBadRequest, "Invalid request body")
+		return
+	}
+	if body.Type != "" && body.Type != "page" {
+		writeWikiError(w, http.StatusBadRequest, "type must be page")
+		return
+	}
+	in := body.write()
+	in.AuthorID = s.identity(r).AccountID
+	pg, err := s.st.UpdatePage(id, in)
+	if err != nil {
+		if store.IsNotFound(err) {
+			writeWikiError(w, http.StatusNotFound, "No content found with id: "+id)
+			return
+		}
+		if store.IsConflict(err) {
+			writeWikiError(w, http.StatusConflict, err.Error())
+			return
+		}
+		writeWikiError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, s.pageFullJSON(r, *pg, r.URL.Query().Get("expand")))
+}
+
+func (s *Server) getContentVersions(w http.ResponseWriter, r *http.Request, id string) {
+	all, err := s.st.PageVersions(id)
+	if err != nil {
+		writeJSON(w, http.StatusNotFound, map[string]any{
+			"statusCode": 404, "message": "No content found with id: " + id,
+		})
+		return
+	}
+	limit := atoiDefault(r.URL.Query().Get("limit"), 25)
+	if limit <= 0 {
+		limit = 25
+	}
+	start := atoiDefault(r.URL.Query().Get("start"), 0)
+	// Same next=true&cursor=N convention as getContentSearch.
+	if r.URL.Query().Get("next") == "true" {
+		if c := r.URL.Query().Get("cursor"); c != "" {
+			if n, err := strconv.Atoi(c); err == nil {
+				start = n
+			}
+		}
+	}
+	if start > len(all) {
+		start = len(all)
+	}
+	end := start + limit
+	if end > len(all) {
+		end = len(all)
+	}
+	results := make([]any, 0, end-start)
+	for _, v := range all[start:end] {
+		results = append(results, s.pageVersionJSON(v))
+	}
+	links := map[string]any{"base": s.wikiBase(r)}
+	if end < len(all) {
+		links["next"] = "/rest/api/content/" + id + "/version?next=true&cursor=" + strconv.Itoa(end) + "&limit=" + strconv.Itoa(limit)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"results": results,
+		"start":   start,
+		"limit":   limit,
+		"size":    len(results),
+		"_links":  links,
+	})
 }

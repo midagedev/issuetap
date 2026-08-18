@@ -22,16 +22,16 @@ type Named struct {
 // User is an Atlassian account. Cloud uses AccountID; Data Center fills
 // Name/Key (username/userKey) and may leave AccountID empty.
 type User struct {
-	AccountID    string            `json:"accountId,omitempty"`
-	Name         string            `json:"name,omitempty"`    // DC username
-	Key          string            `json:"key,omitempty"`     // DC userKey
-	DisplayName  string            `json:"displayName"`
-	Email        string            `json:"emailAddress,omitempty"`
-	Active       bool              `json:"active"`
-	TimeZone     string            `json:"timeZone,omitempty"`
-	Locale       string            `json:"locale,omitempty"`
-	AvatarURLs   map[string]string `json:"avatarUrls,omitempty"`
-	AccountType  string            `json:"accountType,omitempty"`
+	AccountID   string            `json:"accountId,omitempty"`
+	Name        string            `json:"name,omitempty"` // DC username
+	Key         string            `json:"key,omitempty"`  // DC userKey
+	DisplayName string            `json:"displayName"`
+	Email       string            `json:"emailAddress,omitempty"`
+	Active      bool              `json:"active"`
+	TimeZone    string            `json:"timeZone,omitempty"`
+	Locale      string            `json:"locale,omitempty"`
+	AvatarURLs  map[string]string `json:"avatarUrls,omitempty"`
+	AccountType string            `json:"accountType,omitempty"`
 }
 
 // Status is a workflow status. Category.Key is the only stable axis
@@ -64,12 +64,12 @@ type Priority struct {
 // IssueType carries hierarchyLevel so clients can tell epic / standard / sub-task
 // without reading the (localized) name.
 type IssueType struct {
-	ID              string `json:"id"`
-	Name            string `json:"name"`
-	Untranslated    string `json:"untranslatedName,omitempty"`
-	HierarchyLevel  int    `json:"hierarchyLevel"`
-	Subtask         bool   `json:"subtask"`
-	Description     string `json:"description,omitempty"`
+	ID             string `json:"id"`
+	Name           string `json:"name"`
+	Untranslated   string `json:"untranslatedName,omitempty"`
+	HierarchyLevel int    `json:"hierarchyLevel"`
+	Subtask        bool   `json:"subtask"`
+	Description    string `json:"description,omitempty"`
 }
 
 // Resolution is a done-reason. Names localize.
@@ -80,23 +80,23 @@ type Resolution struct {
 
 // Project is one Jira project.
 type Project struct {
-	ID       string `json:"id"`
-	Key      string `json:"key"`
-	Name     string `json:"name"`
-	TypeKey  string `json:"projectTypeKey"`
-	Style    string `json:"style,omitempty"`
-	Simplified bool `json:"simplified,omitempty"`
+	ID         string `json:"id"`
+	Key        string `json:"key"`
+	Name       string `json:"name"`
+	TypeKey    string `json:"projectTypeKey"`
+	Style      string `json:"style,omitempty"`
+	Simplified bool   `json:"simplified,omitempty"`
 }
 
 // Comment is an issue comment. Body is ADF (Cloud) or a wiki-markup string (DC)
 // depending on the dialect serializer — the store keeps ADF plus a plain text.
 type Comment struct {
-	ID      string          `json:"id"`
-	Author  User            `json:"author"`
-	Body    json.RawMessage `json:"body"`
-	BodyText string         `json:"-"`
-	Created string          `json:"created"`
-	Updated string          `json:"updated"`
+	ID       string          `json:"id"`
+	Author   User            `json:"author"`
+	Body     json.RawMessage `json:"body"`
+	BodyText string          `json:"-"`
+	Created  string          `json:"created"`
+	Updated  string          `json:"updated"`
 }
 
 // Attachment metadata. Bytes live on the store keyed by ID.
@@ -112,9 +112,9 @@ type Attachment struct {
 
 // IssueLink is one inward or outward link.
 type IssueLink struct {
-	TypeName     string `json:"-"`
-	InwardKey    string `json:"-"`
-	OutwardKey   string `json:"-"`
+	TypeName   string `json:"-"`
+	InwardKey  string `json:"-"`
+	OutwardKey string `json:"-"`
 }
 
 // HistoryItem is one field change. Field is the localized display name;
@@ -138,15 +138,15 @@ type History struct {
 
 // FieldInfo is one row of GET /field.
 type FieldInfo struct {
-	ID       string `json:"id"`
-	Key      string `json:"key,omitempty"`
-	Name     string `json:"name"`
-	Custom   bool   `json:"custom"`
-	Clause   []string `json:"clauseNames,omitempty"`
-	Schema   FieldSchema `json:"schema"`
-	Orderable bool `json:"orderable"`
-	Navigable bool `json:"navigable"`
-	Searchable bool `json:"searchable"`
+	ID         string      `json:"id"`
+	Key        string      `json:"key,omitempty"`
+	Name       string      `json:"name"`
+	Custom     bool        `json:"custom"`
+	Clause     []string    `json:"clauseNames,omitempty"`
+	Schema     FieldSchema `json:"schema"`
+	Orderable  bool        `json:"orderable"`
+	Navigable  bool        `json:"navigable"`
+	Searchable bool        `json:"searchable"`
 }
 
 // FieldSchema is the Jira field schema fragment.
@@ -215,23 +215,34 @@ type Space struct {
 	HomepageID string
 }
 
-// Page is a Confluence content row.
-type Page struct {
-	ID        string
-	Type      string // page | comment | blogpost
-	Status    string
-	Title     string
-	SpaceKey  string
-	Version   int
+// PageVersion is one Confluence content version. Number is 1-based.
+// Message is the editor's "what changed" note and must round-trip.
+type PageVersion struct {
+	Number    int
 	When      string
 	AuthorID  string
-	BodyADF   json.RawMessage
-	BodyText  string
+	Message   string
+	MinorEdit bool
+}
+
+// Page is a Confluence content row.
+type Page struct {
+	ID          string
+	Type        string // page | comment | blogpost
+	Status      string
+	Title       string
+	SpaceKey    string
+	Version     int
+	When        string
+	AuthorID    string
+	BodyADF     json.RawMessage
+	BodyText    string
 	BodyStorage string // XHTML for DC
-	Labels    []string
-	Ancestors []string // parent chain, last is direct parent
-	Container string   // for comments: page id
-	WebUI     string
+	Labels      []string
+	Ancestors   []string // parent chain, last is direct parent
+	Container   string   // for comments: page id
+	WebUI       string
+	Versions    []PageVersion // ascending number; GET /version serves newest-first
 }
 
 // PageComment is a child comment (or reply) on a page.

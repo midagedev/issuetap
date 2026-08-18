@@ -73,7 +73,9 @@ Jira layout `2006-01-02T15:04:05.000-0700`.
 | Spaces | `GET /wiki/rest/api/space`, `GET /wiki/rest/api/space/{key}` | Supported | |
 | CQL | `GET /wiki/rest/api/content/search` | Supported | `space`, `type`, `lastModified`; `_links.next`. |
 | Page | `GET /wiki/rest/api/content/{id}` | Supported | `body.atlas_doc_format`. |
+| Page versions | `GET /wiki/rest/api/content/{id}/version` | Supported | Newest-first (`number` desc). `start`/`limit`; `_links.next` uses the same `next=true&cursor=` convention as content/search. Each row has `by`, `when`, `message`, `number`, `minorEdit`. |
 | Page comments | `GET /wiki/rest/api/content/{id}/child/comment` | Supported | |
+| Wiki writes | `POST /wiki/rest/api/content`, `PUT /wiki/rest/api/content/{id}` | Supported | Create is version 1. Update requires `version.number == current+1` (409 otherwise). `version.message` is stored and served by `/version`. |
 
 JQL subset: `project`, `key`, `updated`, `created`, `status`,
 `statusCategory`, `issuetype`/`type`, `priority`, `assignee`, `reporter`,

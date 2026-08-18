@@ -25,6 +25,15 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 	_ = json.NewEncoder(w).Encode(v)
 }
 
+// writeWikiError is the Confluence v1 envelope used by getPage / CQL
+// (statusCode + message), not the Jira errorMessages shape.
+func writeWikiError(w http.ResponseWriter, status int, message string) {
+	writeJSON(w, status, map[string]any{
+		"statusCode": status,
+		"message":    message,
+	})
+}
+
 func writeJiraError(w http.ResponseWriter, status int, messages ...string) {
 	if len(messages) == 0 {
 		messages = []string{http.StatusText(status)}

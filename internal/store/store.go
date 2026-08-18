@@ -491,6 +491,21 @@ func (s *Store) seedSeqsLocked() {
 	if maxH > s.seqHist {
 		s.seqHist = maxH
 	}
+	// Runtime page ids: 20000+seqPage. Authored ids outside that band
+	// (and comment ids in 30000+) are left alone.
+	maxP := 0
+	for id := range s.pages {
+		n, err := strconv.Atoi(id)
+		if err != nil {
+			continue
+		}
+		if n >= 20000 && n < 30000 && n-20000 > maxP {
+			maxP = n - 20000
+		}
+	}
+	if maxP > s.seqPage {
+		s.seqPage = maxP
+	}
 }
 
 // seedClockLocked jumps the deterministic clock past every timestamp in
@@ -529,6 +544,9 @@ func (s *Store) seedClockLocked() {
 	}
 	for _, p := range s.pages {
 		see(p.When)
+		for _, v := range p.Versions {
+			see(v.When)
+		}
 		for _, c := range s.pageComments[p.ID] {
 			see(c.When)
 		}
@@ -856,24 +874,49 @@ func (s *Store) putPage(p fixtures.Page) {
 	if ver <= 0 {
 		ver = 1
 	}
-	when := p.When
-	if when == "" {
-		when = clock.Format(s.clk.Tick())
-		// Confluence Cloud stamps version.when as RFC3339 Z.
-		if t, err := time.Parse(model.JiraTime, when); err == nil {
-			when = t.UTC().Format("2006-01-02T15:04:05.000Z")
-		}
-	}
+	when := formatConfluenceWhen(s.clk, p.When)
 	var ancestors []string
 	if p.Parent != "" {
 		ancestors = []string{p.Parent}
 	}
+	authorID := s.resolveUser(p.Author)
 	pg := &model.Page{
 		ID: id, Type: typ, Status: st, Title: p.Title, SpaceKey: p.Space,
-		Version: ver, When: when, AuthorID: s.resolveUser(p.Author),
+		Version: ver, When: when, AuthorID: authorID,
 		BodyADF: adf.Doc(p.Body), BodyText: p.Body, BodyStorage: adf.StorageXHTML(p.Body),
 		Labels: append([]string{}, p.Labels...), Ancestors: ancestors,
 		WebUI: fmt.Sprintf("/spaces/%s/pages/%s", p.Space, id),
+	}
+	if len(p.Versions) == 0 {
+		// Authored fixtures historically stored only the current stamp.
+		// Synthesize one row so GET /version has something to serve.
+		pg.Versions = []model.PageVersion{{
+			Number: ver, When: when, AuthorID: authorID,
+		}}
+	} else {
+		for _, v := range p.Versions {
+			n := v.Number
+			if n <= 0 {
+				n = 1
+			}
+			vwhen := v.When
+			if vwhen == "" {
+				vwhen = when
+			}
+			pg.Versions = append(pg.Versions, model.PageVersion{
+				Number: n, When: vwhen, AuthorID: s.resolveUser(first(v.Author, p.Author)),
+				Message: v.Message, MinorEdit: v.MinorEdit,
+			})
+		}
+		sort.Slice(pg.Versions, func(i, j int) bool { return pg.Versions[i].Number < pg.Versions[j].Number })
+		last := pg.Versions[len(pg.Versions)-1]
+		if pg.Version < last.Number {
+			pg.Version = last.Number
+		}
+		pg.When = last.When
+		if last.AuthorID != "" {
+			pg.AuthorID = last.AuthorID
+		}
 	}
 	s.pages[id] = pg
 	if sp := s.spaces[p.Space]; sp != nil && sp.HomepageID == "" {
@@ -1509,6 +1552,193 @@ func (s *Store) SearchPages(cqlText string) ([]model.Page, error) {
 	return out, nil
 }
 
+// PageWrite is a Cloud v1 content create/update.
+type PageWrite struct {
+	Title     string
+	SpaceKey  string
+	ParentID  string
+	BodyADF   json.RawMessage
+	AuthorID  string
+	Message   string
+	MinorEdit bool
+	// Next is the requested version.number on update. Ignored on create.
+	Next int
+}
+
+// CreatePage inserts a page at version 1 and appends the first history row.
+func (s *Store) CreatePage(in PageWrite) (*model.Page, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	title := strings.TrimSpace(in.Title)
+	if title == "" {
+		return nil, fmt.Errorf("title is required")
+	}
+	if in.SpaceKey == "" || s.spaces[in.SpaceKey] == nil {
+		return nil, fmt.Errorf("No space found with key: %s", in.SpaceKey)
+	}
+	var ancestors []string
+	if in.ParentID != "" {
+		parent := s.pages[in.ParentID]
+		if parent == nil {
+			return nil, fmt.Errorf("No content found with id: %s", in.ParentID)
+		}
+		ancestors = []string{in.ParentID}
+	}
+	body, text, err := parseADF(in.BodyADF)
+	if err != nil {
+		return nil, err
+	}
+	s.seqPage++
+	id := strconv.Itoa(20000 + s.seqPage)
+	when := formatConfluenceWhen(s.clk, "")
+	author := in.AuthorID
+	if author == "" {
+		author = s.userOrDefault("").AccountID
+	}
+	ver := model.PageVersion{
+		Number: 1, When: when, AuthorID: author,
+		Message: in.Message, MinorEdit: in.MinorEdit,
+	}
+	pg := &model.Page{
+		ID: id, Type: "page", Status: "current", Title: title, SpaceKey: in.SpaceKey,
+		Version: 1, When: when, AuthorID: author,
+		BodyADF: body, BodyText: text, BodyStorage: adf.StorageXHTML(text),
+		Ancestors: ancestors, Versions: []model.PageVersion{ver},
+		WebUI: fmt.Sprintf("/spaces/%s/pages/%s", in.SpaceKey, id),
+	}
+	s.pages[id] = pg
+	s.markDirtyLocked()
+	cp := *pg
+	return &cp, nil
+}
+
+// UpdatePage applies a Confluence optimistic-concurrency update: Next must
+// equal the current version + 1. A miss is IsConflict (HTTP 409).
+func (s *Store) UpdatePage(id string, in PageWrite) (*model.Page, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	pg := s.pages[id]
+	if pg == nil {
+		return nil, errNotFound("page", id)
+	}
+	want := pg.Version + 1
+	if want <= 0 {
+		want = 2
+	}
+	if in.Next != want {
+		return nil, errConflict(fmt.Sprintf("Version must be incremented on update. Current version is: %d", pg.Version))
+	}
+	title := strings.TrimSpace(in.Title)
+	if title == "" {
+		return nil, fmt.Errorf("title is required")
+	}
+	if in.SpaceKey != "" && s.spaces[in.SpaceKey] == nil {
+		return nil, fmt.Errorf("No space found with key: %s", in.SpaceKey)
+	}
+	if in.ParentID != "" {
+		if in.ParentID != pg.ID && s.pages[in.ParentID] == nil {
+			return nil, fmt.Errorf("No content found with id: %s", in.ParentID)
+		}
+		pg.Ancestors = []string{in.ParentID}
+	}
+	if len(in.BodyADF) > 0 {
+		body, text, err := parseADF(in.BodyADF)
+		if err != nil {
+			return nil, err
+		}
+		pg.BodyADF = body
+		pg.BodyText = text
+		pg.BodyStorage = adf.StorageXHTML(text)
+	}
+	when := formatConfluenceWhen(s.clk, "")
+	author := in.AuthorID
+	if author == "" {
+		author = s.userOrDefault("").AccountID
+	}
+	pg.Title = title
+	if in.SpaceKey != "" {
+		pg.SpaceKey = in.SpaceKey
+		pg.WebUI = fmt.Sprintf("/spaces/%s/pages/%s", in.SpaceKey, pg.ID)
+	}
+	pg.Version = want
+	pg.When = when
+	pg.AuthorID = author
+	pg.Versions = append(pg.Versions, model.PageVersion{
+		Number: want, When: when, AuthorID: author,
+		Message: in.Message, MinorEdit: in.MinorEdit,
+	})
+	s.markDirtyLocked()
+	cp := *pg
+	return &cp, nil
+}
+
+// PageVersions returns history newest-first (number descending). That is
+// the Cloud v2 default and the documented order for this endpoint.
+func (s *Store) PageVersions(id string) ([]model.PageVersion, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	pg := s.pages[id]
+	if pg == nil {
+		return nil, errNotFound("page", id)
+	}
+	out := append([]model.PageVersion(nil), pg.Versions...)
+	if len(out) == 0 {
+		out = []model.PageVersion{{
+			Number: pg.Version, When: pg.When, AuthorID: pg.AuthorID,
+		}}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Number > out[j].Number })
+	return out, nil
+}
+
+func formatConfluenceWhen(clk *clock.Clock, explicit string) string {
+	if explicit != "" {
+		return explicit
+	}
+	when := clock.Format(clk.Tick())
+	if t, err := time.Parse(model.JiraTime, when); err == nil {
+		return t.UTC().Format("2006-01-02T15:04:05.000Z")
+	}
+	return when
+}
+
+// parseADF accepts body.atlas_doc_format.value as a JSON string of an ADF
+// document or as the document object itself.
+func parseADF(raw json.RawMessage) (json.RawMessage, string, error) {
+	s := strings.TrimSpace(string(raw))
+	if s == "" || s == "null" {
+		return nil, "", fmt.Errorf("malformed ADF")
+	}
+	var obj json.RawMessage
+	switch s[0] {
+	case '"':
+		var inner string
+		if err := json.Unmarshal(raw, &inner); err != nil {
+			return nil, "", fmt.Errorf("malformed ADF")
+		}
+		inner = strings.TrimSpace(inner)
+		if inner == "" || inner[0] != '{' || !json.Valid([]byte(inner)) {
+			return nil, "", fmt.Errorf("malformed ADF")
+		}
+		obj = json.RawMessage(inner)
+	case '{':
+		if !json.Valid(raw) {
+			return nil, "", fmt.Errorf("malformed ADF")
+		}
+		obj = json.RawMessage(s)
+	default:
+		return nil, "", fmt.Errorf("malformed ADF")
+	}
+	var node map[string]any
+	if err := json.Unmarshal(obj, &node); err != nil {
+		return nil, "", fmt.Errorf("malformed ADF")
+	}
+	if typ, _ := node["type"].(string); typ != "doc" {
+		return nil, "", fmt.Errorf("malformed ADF")
+	}
+	return obj, adf.Plain(obj), nil
+}
+
 // AttachmentBytes returns stored bytes.
 func (s *Store) AttachmentBytes(id string) ([]byte, *model.Attachment) {
 	s.mu.RLock()
@@ -1978,6 +2208,19 @@ func IsNotFound(err error) bool {
 	return ok
 }
 
+type conflictError struct{ msg string }
+
+func (e conflictError) Error() string { return e.msg }
+
+func errConflict(msg string) error { return conflictError{msg} }
+
+// IsConflict reports a Confluence optimistic-concurrency miss
+// (PUT version.number != current+1).
+func IsConflict(err error) bool {
+	_, ok := err.(conflictError)
+	return ok
+}
+
 // Snapshot returns a fixture document of the current graph.
 func (s *Store) Snapshot() fixtures.Doc {
 	s.mu.RLock()
@@ -2048,6 +2291,12 @@ func (s *Store) snapshotLocked() fixtures.Doc {
 		}
 		if n := len(p.Ancestors); n > 0 {
 			fp.Parent = p.Ancestors[n-1]
+		}
+		for _, v := range p.Versions {
+			fp.Versions = append(fp.Versions, fixtures.PageVersion{
+				Number: v.Number, When: v.When, Author: v.AuthorID,
+				Message: v.Message, MinorEdit: v.MinorEdit,
+			})
 		}
 		for _, cm := range s.pageComments[id] {
 			fp.Comments = append(fp.Comments, fixtures.PageComment{

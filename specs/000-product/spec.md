@@ -29,7 +29,7 @@ It is not an issue tracker.
 
 A fixture is loaded. gadak is pointed at `http://127.0.0.1:<port>` with a
 throwaway profile. `gadak sync` mirrors issues, comments, changelog, and
-Confluence pages. Counts match the fixture.
+Confluence pages (including page version history). Counts match the fixture.
 
 ### 2. Localized names break a name-keyed client
 
@@ -45,7 +45,8 @@ retries forever fails the scenario.
 
 A Go program embeds issuetap (`issuetap.NewEmbedded`), points a client at
 its handler, creates data, and shuts down. On the next start with the
-same `PersistPath` the data is back: issues, comments, attachment bytes.
+same `PersistPath` the data is back: issues, comments, attachment bytes,
+wiki pages, and page version history (including `version.message`).
 Ids continue (no reuse) and new mutations are stamped after the restored
 rows, so an `updated >=` delta sync does not skip them.
 

@@ -21,6 +21,8 @@ package api_test
 // | Confluence /wiki/rest/api/space | TestSpaces | TestSpaceMissing |
 // | Confluence content/search CQL | TestCQLPages | TestCQLUnsupported |
 // | Confluence content/{id} ADF | TestPageADF | TestPageMissing |
+// | Confluence content/{id}/version | TestWikiCreateUpdateVersionHistory | TestWikiVersionMissingPage |
+// | Confluence POST/PUT /content | TestWikiCreateUpdateVersionHistory | TestWikiUpdateStaleVersion / TestWikiCreateValidation |
 // | Confluence child/comment | TestPageComments | TestPageCommentsEmpty |
 // | unsupported_endpoint 501 | TestUnsupported | TestUnsupportedNot404 |
 // | writes: comment / transition / assignee | TestWrites | TestWriteMissingIssue |

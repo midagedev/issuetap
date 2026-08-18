@@ -60,6 +60,61 @@ func TestCreateIssueDoesNotReuseFixtureIDs(t *testing.T) {
 	}
 }
 
+func TestPageVersionHistorySnapshotRoundTrip(t *testing.T) {
+	doc := fixtures.Doc{
+		Spaces: []fixtures.Space{{Key: "DOCS", Name: "Docs"}},
+		Pages: []fixtures.Page{{
+			ID: "20099", Title: "Retention", Space: "DOCS", Version: 2,
+			When: "2026-08-02T00:00:00.000Z", Author: "ada", Body: "current",
+			Versions: []fixtures.PageVersion{
+				{Number: 1, Message: "initial draft", When: "2026-08-01T00:00:00.000Z", Author: "ada"},
+				{Number: 2, Message: "tightened the retention paragraph", When: "2026-08-02T00:00:00.000Z", Author: "ada"},
+			},
+		}},
+	}
+	st := New(Options{Seed: 1, Locale: locale.EN})
+	if err := st.Apply(doc); err != nil {
+		t.Fatal(err)
+	}
+	got, err := st.PageVersions("20099")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 || got[0].Number != 2 || got[0].Message != "tightened the retention paragraph" {
+		t.Fatalf("after apply: %+v", got)
+	}
+
+	snap := st.Snapshot()
+	var found fixtures.Page
+	for _, p := range snap.Pages {
+		if p.ID == "20099" {
+			found = p
+		}
+	}
+	if len(found.Versions) != 2 {
+		t.Fatalf("snapshot versions = %+v", found.Versions)
+	}
+	msgs := map[int]string{}
+	for _, v := range found.Versions {
+		msgs[v.Number] = v.Message
+	}
+	if msgs[1] != "initial draft" || msgs[2] != "tightened the retention paragraph" {
+		t.Fatalf("snapshot messages = %v", msgs)
+	}
+
+	st2 := New(Options{Seed: 1, Locale: locale.EN})
+	if err := st2.Apply(snap); err != nil {
+		t.Fatal(err)
+	}
+	got2, err := st2.PageVersions("20099")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got2) != 2 || got2[0].Message != "tightened the retention paragraph" || got2[1].Message != "initial draft" {
+		t.Fatalf("after reload: %+v", got2)
+	}
+}
+
 func TestDuplicateKeyRejected(t *testing.T) {
 	_, err := fixtures.Parse([]byte(`
 issues:

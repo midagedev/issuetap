@@ -233,3 +233,129 @@ func TestGadakBackoffOn429(t *testing.T) {
 		t.Fatalf("gadak should succeed after retrying 429: %v", err)
 	}
 }
+
+// TestGadakMirrorsPageVersionHistory is the seam between two independently
+// built halves: issuetap serves GET /wiki/rest/api/content/{id}/version
+// newest-first, and gadak's collector writes page_versions. Neither side's
+// own tests can prove they agree — issuetap's assert its JSON, gadak's assert
+// against a local httptest fake. Only real gadak over real HTTP does.
+//
+// It also pins the two properties most likely to rot silently across the
+// seam: the editor's message must survive (it is the only field carrying
+// human intent, and the reason the table exists), and gadak must not inherit
+// the server's ordering (issuetap answers descending; the mirror stores and
+// reads ascending).
+func TestGadakMirrorsPageVersionHistory(t *testing.T) {
+	bin := buildGadak(t)
+	root := repoRoot(t)
+
+	// A dedicated fixture: tiny.yaml is shared by six test files, and this
+	// needs a multi-version page. Derive it rather than editing the original.
+	src, err := os.ReadFile(filepath.Join(root, "examples/fixtures/tiny.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	const anchor = "    space: DOCS\n    version: 1\n"
+	if !strings.Contains(string(src), anchor) {
+		t.Fatalf("tiny.yaml page anchor not found; update this test to match the fixture:\n%q", anchor)
+	}
+	withVersions := strings.Replace(string(src), anchor, "    space: DOCS\n"+
+		"    version: 3\n"+
+		"    versions:\n"+
+		"      - number: 1\n"+
+		"        when: \"2026-08-01T00:00:00.000Z\"\n"+
+		"        author: 5b10a2844c20165700ede21g\n"+
+		"        message: initial draft\n"+
+		"      - number: 2\n"+
+		"        when: \"2026-08-02T00:00:00.000Z\"\n"+
+		"        author: 5b10a2844c20165700ede22g\n"+
+		"        message: tightened the retention paragraph\n"+
+		"      - number: 3\n"+
+		"        when: \"2026-08-03T00:00:00.000Z\"\n"+
+		"        author: 5b10a2844c20165700ede21g\n"+
+		"        message: \"\"\n", 1)
+	fixture := filepath.Join(t.TempDir(), "page-versions.yaml")
+	if err := os.WriteFile(fixture, []byte(withVersions), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	base, _ := startIssuetap(t, fixture, locale.EN, nil)
+	home := writeGadakHome(t, base)
+
+	cmd := exec.Command(bin, "sync", "--full")
+	cmd.Env = append(os.Environ(), "GADAK_HOME="+home, "GADAK_PROFILE=")
+	out, err := cmd.CombinedOutput()
+	t.Logf("gadak sync:\n%s", out)
+	if err != nil {
+		t.Fatalf("gadak sync: %v", err)
+	}
+
+	db, err := sql.Open("sqlite", filepath.Join(home, "gadak.db")+"?mode=ro")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	rows, err := db.Query(`
+		SELECT pv.number, pv.message, pv.author_name
+		FROM page_versions pv
+		JOIN items i ON i.id = pv.item_id
+		WHERE i.external_id = '20001'
+		ORDER BY pv.number ASC`)
+	if err != nil {
+		t.Fatalf("page_versions query: %v", err)
+	}
+	defer rows.Close()
+
+	type stamp struct {
+		number  int
+		message string
+		author  string
+	}
+	var got []stamp
+	for rows.Next() {
+		var s stamp
+		if err := rows.Scan(&s.number, &s.message, &s.author); err != nil {
+			t.Fatal(err)
+		}
+		got = append(got, s)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+
+	if len(got) != 3 {
+		t.Fatalf("page_versions rows=%d want 3: %+v", len(got), got)
+	}
+	// Ascending in the mirror even though the server answers descending.
+	for i, want := range []int{1, 2, 3} {
+		if got[i].number != want {
+			t.Errorf("row %d number=%d want %d", i, got[i].number, want)
+		}
+	}
+	if got[0].message != "initial draft" {
+		t.Errorf("v1 message=%q want %q", got[0].message, "initial draft")
+	}
+	if got[1].message != "tightened the retention paragraph" {
+		t.Errorf("v2 message=%q want %q", got[1].message, "tightened the retention paragraph")
+	}
+	if got[2].message != "" {
+		t.Errorf("v3 message=%q want empty", got[2].message)
+	}
+	// The author is resolved to a display name, not left as an accountId.
+	if got[1].author != "Dana" {
+		t.Errorf("v2 author_name=%q want %q", got[1].author, "Dana")
+	}
+
+	// No bodies. The table exists to stay cheap; a body column would mean the
+	// mirror grows with edits-per-page.
+	var cols int
+	if err := db.QueryRow(`
+		SELECT COUNT(*) FROM pragma_table_info('page_versions')
+		WHERE name IN ('body','body_adf','body_text')`).Scan(&cols); err != nil {
+		t.Fatal(err)
+	}
+	if cols != 0 {
+		t.Errorf("page_versions has %d body column(s); stamps only", cols)
+	}
+}

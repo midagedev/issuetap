@@ -64,7 +64,7 @@ Jira layout `2006-01-02T15:04:05.000-0700`.
 | Changelog | `GET /issue/{key}/changelog` | Supported | `values` / `total` / `isLast`. |
 | Comments | `GET /issue/{key}/comment` | Supported | `startAt` / `maxResults` / `total`. |
 | Filters | `GET /filter/my` | Supported | |
-| Users | `GET /user/search` | Supported | |
+| Users | `GET /user/search` | Supported | `query=me` is the `/myself` identity. |
 | Transitions | `GET/POST /issue/{key}/transitions` | Supported | Synthetic transitions to every other status. |
 | Edit meta | `GET /issue/{key}/editmeta` | Partial | summary, description, labels, priority (+allowedValues), assignee, duedate, parent, issuetype (+allowedValues), plus fixture custom fields (kind schema; option kinds include allowedValues). Not per-screen field config. |
 | Create meta | `GET /issue/createmeta` | Partial | projects + types. |

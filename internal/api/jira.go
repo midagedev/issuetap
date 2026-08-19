@@ -3,6 +3,7 @@ package api
 import (
 	"encoding/json"
 	"io"
+	"log"
 	"mime"
 	"mime/multipart"
 	"net/http"
@@ -101,6 +102,21 @@ func (s *Server) identity(r *http.Request) *model.User {
 		}
 	}
 	return s.st.DefaultUser()
+}
+
+// currentUserAlias maps a user/search query onto identity, the same
+// current-user source GET /myself uses. Only the account-context alias
+// "me" is supported. Unknown alias-shaped queries return nil so the
+// caller can log rather than invent a second lookup.
+func (s *Server) currentUserAlias(r *http.Request, query string) *model.User {
+	if !strings.EqualFold(strings.TrimSpace(query), "me") {
+		return nil
+	}
+	return s.identity(r)
+}
+
+func userSearchAliasUnsupported(query string) bool {
+	return strings.HasSuffix(strings.TrimSpace(query), "()")
 }
 
 func (s *Server) getServerInfo(w http.ResponseWriter, r *http.Request) {
@@ -373,7 +389,15 @@ func (s *Server) getMyFilters(w http.ResponseWriter, r *http.Request) {
 func (s *Server) getUserSearch(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query().Get("query")
 	max := atoiDefault(r.URL.Query().Get("maxResults"), 20)
-	users := s.st.SearchUsers(q, max)
+	var users []model.User
+	if u := s.currentUserAlias(r, q); u != nil {
+		users = []model.User{*u}
+	} else {
+		if userSearchAliasUnsupported(q) {
+			log.Printf("issuetap: GET /user/search query=%q is not a supported user alias; serving substring matches", q)
+		}
+		users = s.st.SearchUsers(q, max)
+	}
 	out := make([]any, 0, len(users))
 	for _, u := range users {
 		out = append(out, s.userJSON(u))

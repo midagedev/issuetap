@@ -18,6 +18,7 @@ package api_test
 // | GET /priority order | TestPriorityOrder | TestPriorityLocaleOverlay |
 // | GET /field catalog | TestFieldCatalog | TestFieldNamesLocalize |
 // | GET /filter/my | TestFilters | TestFiltersEmpty |
+// | GET /user/search query=me is /myself | TestUserSearchMeMatchesMyself | TestUserSearchUnsupportedAliasNot400 |
 // | Confluence /wiki/rest/api/space | TestSpaces | TestSpaceMissing |
 // | Confluence content/search CQL | TestCQLPages | TestCQLUnsupported |
 // | Confluence content/{id} ADF | TestPageADF | TestPageMissing |
@@ -423,6 +424,51 @@ func TestFiltersEmpty(t *testing.T) {
 	arr := decodeArr(t, authGet(t, ts, "/rest/api/3/filter/my"))
 	if arr == nil {
 		t.Fatal("null filters")
+	}
+}
+
+func authGetAs(t *testing.T, ts *httptest.Server, email, path string) *http.Response {
+	t.Helper()
+	req, _ := http.NewRequest(http.MethodGet, ts.URL+path, nil)
+	req.SetBasicAuth(email, "issuetap")
+	req.Header.Set("Accept", "application/json")
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return res
+}
+
+func TestUserSearchMeMatchesMyself(t *testing.T) {
+	ts := testServer(t, locale.EN, dialect.Cloud)
+	defer ts.Close()
+	// dana@example.com is not DefaultUser (Ada). Matching /myself on this
+	// login proves query=me uses identity(), not a copied DefaultUser lookup.
+	for _, email := range []string{"you@example.com", "dana@example.com"} {
+		myself := decode(t, authGetAs(t, ts, email, "/rest/api/3/myself"))
+		arr := decodeArr(t, authGetAs(t, ts, email, "/rest/api/3/user/search?query=me"))
+		if len(arr) != 1 {
+			t.Fatalf("email=%s query=me returned %d users, want 1 (the /myself identity)", email, len(arr))
+		}
+		got := arr[0].(map[string]any)
+		if got["accountId"] != myself["accountId"] {
+			t.Fatalf("email=%s query=me accountId=%v, myself accountId=%v", email, got["accountId"], myself["accountId"])
+		}
+	}
+}
+
+func TestUserSearchUnsupportedAliasNot400(t *testing.T) {
+	// JQL-function form is not the supported "me" alias. Real Jira may
+	// answer []; turning that into HTTP 400 would be a dialect lie.
+	ts := testServer(t, locale.EN, dialect.Cloud)
+	defer ts.Close()
+	res := authGet(t, ts, "/rest/api/3/user/search?query=currentUser()")
+	if res.StatusCode != 200 {
+		t.Fatalf("status %d, want 200 (unsupported alias must not become 400)", res.StatusCode)
+	}
+	arr := decodeArr(t, res)
+	if arr == nil {
+		t.Fatal("null users")
 	}
 }
 

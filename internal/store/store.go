@@ -154,7 +154,11 @@ func Open(opt Options) (*Store, error) {
 		return nil, fmt.Errorf("persist: load %s: %w", opt.PersistPath, err)
 	}
 	if err := st.Apply(doc); err != nil {
-		return nil, fmt.Errorf("persist: apply %s: %w", opt.PersistPath, err)
+		// A durable flush of the just-loaded graph is not a user mutation.
+		// Open still disarms persist bookkeeping below (load is not dirty).
+		if !IsPersist(err) {
+			return nil, fmt.Errorf("persist: apply %s: %w", opt.PersistPath, err)
+		}
 	}
 	st.mu.Lock()
 	if st.persist.timer != nil { // the load armed the debounce; disarm it
@@ -170,22 +174,29 @@ func Open(opt Options) (*Store, error) {
 
 // markDirtyLocked arms the debounced write. Called by every mutation.
 // A zero debounce (from PersistDebounce < 0) writes before the mutation
-// returns so a caller can choose durable-before-response.
-func (s *Store) markDirtyLocked() {
+// returns so a caller can choose durable-before-response. A flush
+// failure in that synchronous mode is returned as PersistError; the
+// in-memory change is kept and a backoff retry remains armed. Debounced
+// mode still returns nil and retries in the background.
+func (s *Store) markDirtyLocked() error {
 	p := s.persist
 	if p == nil {
-		return
+		return nil
 	}
 	p.dirty = true
 	if p.debounce <= 0 {
 		s.flushPersistLocked()
-		return
+		if p.err != nil {
+			return PersistError{Err: p.err}
+		}
+		return nil
 	}
 	if p.timer != nil {
 		p.timer.Reset(p.debounce)
-		return
+		return nil
 	}
 	p.timer = time.AfterFunc(p.debounce, s.flushPersist)
+	return nil
 }
 
 // flushPersist is the timer callback: one atomic write when dirty.
@@ -394,11 +405,11 @@ func (s *Store) Locale() locale.Code {
 }
 
 // SetLocale changes the overlay. Data ids do not change.
-func (s *Store) SetLocale(c locale.Code) {
+func (s *Store) SetLocale(c locale.Code) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.loc = c
-	s.markDirtyLocked()
+	return s.markDirtyLocked()
 }
 
 // Seed is the determinism seed.
@@ -485,8 +496,7 @@ func (s *Store) Apply(doc fixtures.Doc) error {
 	}
 	s.seedSeqsLocked()
 	s.seedClockLocked()
-	s.markDirtyLocked()
-	return nil
+	return s.markDirtyLocked()
 }
 
 // seedSeqsLocked continues every id sequence past the highest restored id
@@ -1656,9 +1666,9 @@ func (s *Store) CreatePage(in PageWrite) (*model.Page, error) {
 		WebUI: fmt.Sprintf("/spaces/%s/pages/%s", in.SpaceKey, id),
 	}
 	s.pages[id] = pg
-	s.markDirtyLocked()
+	err = s.markDirtyLocked()
 	cp := *pg
-	return &cp, nil
+	return &cp, err
 }
 
 // UpdatePage applies a Confluence optimistic-concurrency update: Next must
@@ -1716,9 +1726,9 @@ func (s *Store) UpdatePage(id string, in PageWrite) (*model.Page, error) {
 		Number: want, When: when, AuthorID: author,
 		Message: in.Message, MinorEdit: in.MinorEdit,
 	})
-	s.markDirtyLocked()
+	err := s.markDirtyLocked()
 	cp := *pg
-	return &cp, nil
+	return &cp, err
 }
 
 // PageVersions returns history newest-first (number descending). That is
@@ -1897,8 +1907,7 @@ func (s *Store) Transition(key, transitionID string) error {
 			To: to, ToString: s.displayFor("status", to),
 		}},
 	})
-	s.markDirtyLocked()
-	return nil
+	return s.markDirtyLocked()
 }
 
 // AddComment posts a comment. body is ADF or a string.
@@ -1926,8 +1935,7 @@ func (s *Store) AddComment(key, authorID string, body []byte) (model.Comment, er
 	}
 	iss.Comments = append(iss.Comments, cm)
 	iss.Updated = now
-	s.markDirtyLocked()
-	return cm, nil
+	return cm, s.markDirtyLocked()
 }
 
 // SetAssignee assigns or unassigns.
@@ -1951,8 +1959,7 @@ func (s *Store) SetAssignee(key, accountID string) error {
 			To: accountID, ToString: s.displayFor("assignee", accountID),
 		}},
 	})
-	s.markDirtyLocked()
-	return nil
+	return s.markDirtyLocked()
 }
 
 // UpdateFields applies a fields map (summary, description, labels, …).
@@ -2006,8 +2013,7 @@ func (s *Store) UpdateIssue(key string, fields, update map[string]any) error {
 		}
 	}
 	iss.Updated = clock.Format(s.clk.Tick())
-	s.markDirtyLocked()
-	return nil
+	return s.markDirtyLocked()
 }
 
 func applyUpdateOps(iss *model.Issue, update map[string]any) error {
@@ -2166,8 +2172,7 @@ func (s *Store) CreateIssue(fields map[string]any) (*model.Issue, error) {
 		iss.Custom[k] = v
 	}
 	s.issues[key] = iss
-	s.markDirtyLocked()
-	return iss, nil
+	return iss, s.markDirtyLocked()
 }
 
 func (s *Store) nextKeyNum(project string) int {
@@ -2206,8 +2211,7 @@ func (s *Store) AddAttachment(key, filename, mime, authorID string, body []byte)
 	}
 	iss.Attachments = append(iss.Attachments, a)
 	iss.Updated = a.Created
-	s.markDirtyLocked()
-	return a, nil
+	return a, s.markDirtyLocked()
 }
 
 func pickID(v any) string {
@@ -2288,6 +2292,28 @@ func AsFieldError(err error) (FieldError, bool) {
 		return fe, true
 	}
 	return FieldError{}, false
+}
+
+// PersistError is a durable-mode (PersistDebounce < 0) flush failure.
+// The in-memory mutation has already been applied; a retry (caller or
+// persist backoff) will try the disk write again.
+type PersistError struct {
+	Err error
+}
+
+func (e PersistError) Error() string {
+	if e.Err == nil {
+		return "persist failed; the change is in memory and a retry will try to write it again"
+	}
+	return fmt.Sprintf("persist: %v; the change is in memory and a retry will try to write it again", e.Err)
+}
+
+func (e PersistError) Unwrap() error { return e.Err }
+
+// IsPersist reports a durable persist-flush failure.
+func IsPersist(err error) bool {
+	var pe PersistError
+	return errors.As(err, &pe)
 }
 
 // IsNotFound reports a missing resource.

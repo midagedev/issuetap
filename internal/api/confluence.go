@@ -410,7 +410,7 @@ func (s *Server) postContent(w http.ResponseWriter, r *http.Request) {
 	in.AuthorID = s.identity(r).AccountID
 	pg, err := s.st.CreatePage(in)
 	if err != nil {
-		writeWikiError(w, http.StatusBadRequest, err.Error())
+		writeWikiWriteError(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, s.pageFullJSON(r, *pg, r.URL.Query().Get("expand")))
@@ -438,7 +438,7 @@ func (s *Server) putContent(w http.ResponseWriter, r *http.Request, id string) {
 			writeWikiError(w, http.StatusConflict, err.Error())
 			return
 		}
-		writeWikiError(w, http.StatusBadRequest, err.Error())
+		writeWikiWriteError(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, s.pageFullJSON(r, *pg, r.URL.Query().Get("expand")))

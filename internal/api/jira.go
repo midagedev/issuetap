@@ -494,7 +494,7 @@ func (s *Server) putIssue(w http.ResponseWriter, r *http.Request, key string) {
 			writeJiraFieldErrors(w, map[string]string{fe.Field: fe.Msg})
 			return
 		}
-		writeJiraError(w, http.StatusBadRequest, err.Error())
+		writeJiraWriteError(w, err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -542,7 +542,7 @@ func (s *Server) postComment(w http.ResponseWriter, r *http.Request, key string)
 			writeJiraError(w, http.StatusNotFound, "Issue does not exist")
 			return
 		}
-		writeJiraError(w, http.StatusBadRequest, err.Error())
+		writeJiraWriteError(w, err)
 		return
 	}
 	writeJSON(w, http.StatusCreated, s.commentJSON(cm))
@@ -592,7 +592,7 @@ func (s *Server) postTransition(w http.ResponseWriter, r *http.Request, key stri
 			writeJiraError(w, http.StatusNotFound, err.Error())
 			return
 		}
-		writeJiraError(w, http.StatusBadRequest, err.Error())
+		writeJiraWriteError(w, err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -616,7 +616,7 @@ func (s *Server) putAssignee(w http.ResponseWriter, r *http.Request, key string)
 			writeJiraError(w, http.StatusNotFound, "Issue does not exist")
 			return
 		}
-		writeJiraError(w, http.StatusBadRequest, err.Error())
+		writeJiraWriteError(w, err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -649,7 +649,7 @@ func (s *Server) postIssue(w http.ResponseWriter, r *http.Request) {
 			writeJiraFieldErrors(w, map[string]string{fe.Field: fe.Msg})
 			return
 		}
-		writeJiraError(w, http.StatusBadRequest, err.Error())
+		writeJiraWriteError(w, err)
 		return
 	}
 	writeJSON(w, http.StatusCreated, map[string]any{
@@ -694,7 +694,7 @@ func (s *Server) postAttachment(w http.ResponseWriter, r *http.Request, key stri
 				writeJiraError(w, http.StatusNotFound, "Issue does not exist")
 				return
 			}
-			writeJiraError(w, http.StatusBadRequest, err.Error())
+			writeJiraWriteError(w, err)
 			return
 		}
 		created = append(created, s.attachJSON(r, a))

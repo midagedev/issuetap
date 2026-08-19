@@ -403,3 +403,137 @@ func TestNegativeDebounceWritesBeforeReturn(t *testing.T) {
 		t.Fatalf("sync persist missing mutation:\n%s", b)
 	}
 }
+
+// TestDurablePersistFailureReturnsFromMutation: PersistDebounce < 0 writes
+// on the mutation call, so a persist-path failure is the mutation's error
+// — not a successful return with a silent PersistErr. The in-memory
+// change is kept (no rollback). FAIL-first GDK-346.
+func TestDurablePersistFailureReturnsFromMutation(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state.yaml")
+	st, err := Open(Options{Seed: 1, Locale: locale.EN, PersistPath: path, PersistDebounce: -1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	if err := st.Apply(loadTinyDoc(t)); err != nil {
+		t.Fatal(err)
+	}
+
+	persistPathAsDir(t, path)
+	iss, err := st.CreateIssue(map[string]any{
+		"project": map[string]any{"key": "TAP"}, "summary": "durable-fail",
+	})
+	if err == nil {
+		t.Fatal("expected durable persist failure from CreateIssue; mutation succeeded")
+	}
+	if !IsPersist(err) {
+		t.Fatalf("want PersistError, got %T %v", err, err)
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "in memory") || !strings.Contains(msg, "retry") {
+		t.Fatalf("persist error must say the change stayed in memory and will retry: %q", msg)
+	}
+	if iss == nil || iss.Summary != "durable-fail" {
+		t.Fatalf("in-memory issue missing after persist failure: %+v", iss)
+	}
+	if got := st.Issue(iss.Key); got == nil || got.Summary != "durable-fail" {
+		t.Fatal("mutation was rolled back; persist failure must keep in-memory state")
+	}
+	if st.PersistErr() == nil {
+		t.Fatal("expected PersistErr after durable flush failure")
+	}
+}
+
+// TestDurablePersistFailureAllMutations is the markDirtyLocked census:
+// every mutation must return PersistError in durable mode, not nil.
+func TestDurablePersistFailureAllMutations(t *testing.T) {
+	adf := []byte(`{"type":"doc","version":1,"content":[]}`)
+	cases := []struct {
+		name string
+		fn   func(*Store) error
+	}{
+		{"CreateIssue", func(st *Store) error {
+			_, err := st.CreateIssue(map[string]any{
+				"project": map[string]any{"key": "TAP"}, "summary": "census",
+			})
+			return err
+		}},
+		{"UpdateIssue", func(st *Store) error {
+			return st.UpdateIssue("TAP-1", map[string]any{"summary": "census"}, nil)
+		}},
+		{"AddComment", func(st *Store) error {
+			_, err := st.AddComment("TAP-1", "", []byte("census"))
+			return err
+		}},
+		{"SetAssignee", func(st *Store) error {
+			return st.SetAssignee("TAP-1", "5b10a2844c20165700ede21g")
+		}},
+		{"Transition", func(st *Store) error {
+			return st.Transition("TAP-1", "1")
+		}},
+		{"AddAttachment", func(st *Store) error {
+			_, err := st.AddAttachment("TAP-1", "a.txt", "text/plain", "", []byte("hi"))
+			return err
+		}},
+		{"CreatePage", func(st *Store) error {
+			_, err := st.CreatePage(PageWrite{Title: "census", SpaceKey: "DOCS", BodyADF: adf})
+			return err
+		}},
+		{"UpdatePage", func(st *Store) error {
+			_, err := st.UpdatePage("20001", PageWrite{Title: "Welcome to the lab", Next: 2, BodyADF: adf})
+			return err
+		}},
+		{"Apply", func(st *Store) error {
+			return st.Apply(loadTinyDoc(t))
+		}},
+		{"SetLocale", func(st *Store) error {
+			return st.SetLocale(locale.KO)
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "state.yaml")
+			st, err := Open(Options{Seed: 1, Locale: locale.EN, PersistPath: path, PersistDebounce: -1})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer st.Close()
+			if err := st.Apply(loadTinyDoc(t)); err != nil {
+				t.Fatal(err)
+			}
+			persistPathAsDir(t, path)
+			err = tc.fn(st)
+			if err == nil {
+				t.Fatalf("%s succeeded; durable persist failure must return", tc.name)
+			}
+			if !IsPersist(err) {
+				t.Fatalf("%s: want PersistError, got %T %v", tc.name, err, err)
+			}
+		})
+	}
+}
+
+// TestDebouncedPersistFailureDoesNotFailMutation: async persist still
+// returns nil from the mutation (backoff retry). Locks the durable
+// error-return so it does not leak onto the debounce path.
+func TestDebouncedPersistFailureDoesNotFailMutation(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state.yaml")
+	st, err := Open(Options{Seed: 1, Locale: locale.EN, PersistPath: path, PersistDebounce: time.Hour})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	if err := st.Apply(loadTinyDoc(t)); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Flush(); err != nil {
+		t.Fatal(err)
+	}
+
+	persistPathAsDir(t, path)
+	if _, err := st.CreateIssue(map[string]any{
+		"project": map[string]any{"key": "TAP"}, "summary": "debounce-fail",
+	}); err != nil {
+		t.Fatalf("debounced mutation must succeed while persist retries: %v", err)
+	}
+}

@@ -179,7 +179,7 @@ func (s *Server) apiApply(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.st.Apply(doc); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
+		writeJSONWriteError(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "counts": s.st.Counts()})
@@ -223,7 +223,10 @@ func (s *Server) apiScenario(w http.ResponseWriter, r *http.Request) {
 		s.eng.Replace(sc.Faults)
 	}
 	if sc.Locale != "" {
-		s.st.SetLocale(locale.Parse(sc.Locale))
+		if err := s.st.SetLocale(locale.Parse(sc.Locale)); err != nil {
+			writeJSONWriteError(w, err)
+			return
+		}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"ok":     true,
@@ -241,7 +244,10 @@ func (s *Server) apiSetLocale(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
 		return
 	}
-	s.st.SetLocale(locale.Parse(body.Locale))
+	if err := s.st.SetLocale(locale.Parse(body.Locale)); err != nil {
+		writeJSONWriteError(w, err)
+		return
+	}
 	writeJSON(w, http.StatusOK, map[string]any{"locale": s.st.Locale()})
 }
 

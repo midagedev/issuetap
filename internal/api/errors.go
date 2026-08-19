@@ -3,6 +3,8 @@ package api
 import (
 	"encoding/json"
 	"net/http"
+
+	"github.com/midagedev/issuetap/internal/store"
 )
 
 // jiraError is the Cloud/DC error envelope gadak parses
@@ -66,4 +68,33 @@ func writeUnsupported(w http.ResponseWriter, method, path string) {
 func writeAuth(w http.ResponseWriter) {
 	w.Header().Set("WWW-Authenticate", `Basic realm="issuetap"`)
 	writeJiraError(w, http.StatusUnauthorized, "Client must be authenticated to access this resource.")
+}
+
+// writeJiraWriteError is the fallback for store write errors after
+// not-found / field-error have been checked. Durable persist failures
+// are 500; other rejections stay 400.
+func writeJiraWriteError(w http.ResponseWriter, err error) {
+	if store.IsPersist(err) {
+		writeJiraError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJiraError(w, http.StatusBadRequest, err.Error())
+}
+
+// writeWikiWriteError is the Confluence equivalent of writeJiraWriteError.
+func writeWikiWriteError(w http.ResponseWriter, err error) {
+	if store.IsPersist(err) {
+		writeWikiError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeWikiError(w, http.StatusBadRequest, err.Error())
+}
+
+// writeJSONWriteError is the lab /api envelope for store write errors.
+func writeJSONWriteError(w http.ResponseWriter, err error) {
+	status := http.StatusBadRequest
+	if store.IsPersist(err) {
+		status = http.StatusInternalServerError
+	}
+	writeJSON(w, status, map[string]any{"error": err.Error()})
 }

@@ -74,12 +74,17 @@ type Options struct {
 	PersistPath string
 	// PersistDebounce is the quiet window before a write. Zero (with
 	// PersistPath set) means the 1s default; negative means write on every
-	// mutation.
+	// mutation, before the call returns.
 	PersistDebounce time.Duration
 }
 
 // DefaultPersistDebounce is the write-through quiet window.
 const DefaultPersistDebounce = time.Second
+
+// persistRetryMax caps the delay between persist retries after consecutive
+// write failures. The first retry uses the debounce window (or
+// DefaultPersistDebounce on the synchronous path).
+const persistRetryMax = 30 * time.Second
 
 // persistState is the write-through engine. Owned by Store.mu.
 type persistState struct {
@@ -88,6 +93,7 @@ type persistState struct {
 	timer    *time.Timer
 	dirty    bool
 	err      error // last write error; cleared by the next success
+	backoff  time.Duration
 }
 
 // New returns an empty store with default catalogs. When PersistPath is
@@ -156,17 +162,25 @@ func Open(opt Options) (*Store, error) {
 		st.persist.timer = nil
 	}
 	st.persist.dirty = false // the load itself is not a mutation
+	st.persist.err = nil
+	st.persist.backoff = 0
 	st.mu.Unlock()
 	return st, nil
 }
 
 // markDirtyLocked arms the debounced write. Called by every mutation.
+// A zero debounce (from PersistDebounce < 0) writes before the mutation
+// returns so a caller can choose durable-before-response.
 func (s *Store) markDirtyLocked() {
 	p := s.persist
 	if p == nil {
 		return
 	}
 	p.dirty = true
+	if p.debounce <= 0 {
+		s.flushPersistLocked()
+		return
+	}
 	if p.timer != nil {
 		p.timer.Reset(p.debounce)
 		return
@@ -178,20 +192,59 @@ func (s *Store) markDirtyLocked() {
 func (s *Store) flushPersist() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.flushPersistLocked()
+}
+
+func (s *Store) flushPersistLocked() {
 	p := s.persist
 	if p == nil {
 		return
 	}
-	p.timer = nil
+	if p.timer != nil {
+		p.timer.Stop()
+		p.timer = nil
+	}
 	if !p.dirty {
 		return
 	}
 	if err := s.writePersistLocked(); err != nil {
-		p.err = err // stays dirty; retried by the next mutation or Close
+		p.err = err // stays dirty; retried on a backoff timer
+		s.armPersistRetryLocked()
 		return
 	}
 	p.err = nil
 	p.dirty = false
+	p.backoff = 0
+}
+
+func (s *Store) armPersistRetryLocked() {
+	p := s.persist
+	if p == nil {
+		return
+	}
+	delay := p.nextBackoff()
+	if p.timer != nil {
+		p.timer.Reset(delay)
+		return
+	}
+	p.timer = time.AfterFunc(delay, s.flushPersist)
+}
+
+func (p *persistState) nextBackoff() time.Duration {
+	if p.backoff <= 0 {
+		if p.debounce > 0 {
+			p.backoff = p.debounce
+		} else {
+			p.backoff = DefaultPersistDebounce
+		}
+		return p.backoff
+	}
+	next := p.backoff * 2
+	if next > persistRetryMax {
+		next = persistRetryMax
+	}
+	p.backoff = next
+	return next
 }
 
 func (s *Store) writePersistLocked() error {
@@ -230,7 +283,9 @@ func writeAtomic(path string, b []byte) error {
 }
 
 // Flush writes pending mutations to the persistence file now (no-op when
-// persistence is not armed) and returns the write error, if any.
+// persistence is not armed) and returns the write error, if any. A failed
+// Flush keeps the store dirty and rearms a backoff retry so the failure
+// is not silent if the caller does not retry.
 func (s *Store) Flush() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -238,26 +293,22 @@ func (s *Store) Flush() error {
 	if p == nil {
 		return nil
 	}
-	if p.timer != nil {
-		p.timer.Stop()
-		p.timer = nil
-	}
-	if !p.dirty {
-		return nil
-	}
-	if err := s.writePersistLocked(); err != nil {
-		p.err = err
-		return err
-	}
-	p.err = nil
-	p.dirty = false
-	return nil
+	s.flushPersistLocked()
+	return p.err
 }
 
 // Close flushes pending mutations and stops the debounce timer. Safe to
-// call on a store without persistence.
+// call on a store without persistence. A failed flush still stops the
+// timer: Close is the end of the store's lifetime.
 func (s *Store) Close() error {
-	return s.Flush()
+	err := s.Flush()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if p := s.persist; p != nil && p.timer != nil {
+		p.timer.Stop()
+		p.timer = nil
+	}
+	return err
 }
 
 // PersistErr is the last background (debounced) write error, for

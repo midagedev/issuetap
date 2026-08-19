@@ -261,3 +261,145 @@ func TestPersistCorruptFileFailsLoud(t *testing.T) {
 		t.Fatal("expected an error opening a corrupt persistence file")
 	}
 }
+
+// persistPathAsDir turns path into a directory so writeAtomic's rename
+// cannot replace it. Used to inject a persist write failure.
+func persistPathAsDir(t *testing.T, path string) {
+	t.Helper()
+	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(path, 0o755); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func waitForPersistErr(t *testing.T, st *Store) error {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		if err := st.PersistErr(); err != nil {
+			return err
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("PersistErr stayed nil; persist write did not fail")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+func loadTinyDoc(t *testing.T) fixtures.Doc {
+	t.Helper()
+	doc, err := fixtures.Load(fixtures.Example("tiny.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return doc
+}
+
+// TestFlushWritesLatestAndSurfacesError: Flush persists pending mutations
+// immediately (no debounce wait) and returns the write error when the
+// path cannot be replaced. PersistErr matches that failure.
+func TestFlushWritesLatestAndSurfacesError(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state.yaml")
+	st, err := Open(Options{Seed: 1, Locale: locale.EN, PersistPath: path, PersistDebounce: time.Hour})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	if err := st.Apply(loadTinyDoc(t)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.CreateIssue(map[string]any{
+		"project": map[string]any{"key": "TAP"}, "summary": "flush-latest",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Flush(); err != nil {
+		t.Fatal(err)
+	}
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("Flush did not write: %v", err)
+	}
+	if !strings.Contains(string(b), "flush-latest") {
+		t.Fatalf("flushed file missing latest mutation:\n%s", b)
+	}
+	if err := st.PersistErr(); err != nil {
+		t.Fatalf("PersistErr after successful Flush: %v", err)
+	}
+
+	persistPathAsDir(t, path)
+	if _, err := st.AddComment("TAP-1", "", []byte("flush-fail")); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Flush(); err == nil {
+		t.Fatal("expected Flush to return the persist write error")
+	}
+	if st.PersistErr() == nil {
+		t.Fatal("expected PersistErr after Flush failure")
+	}
+}
+
+// TestPersistRetriesAfterFailureWithoutMutation: a failed background
+// persist must rearm itself. After the path is writable again, the file
+// appears with no further mutation. FAIL-first 2026-08-20: flushPersist
+// stored the error, kept dirty, and set timer=nil, so this timed out.
+func TestPersistRetriesAfterFailureWithoutMutation(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state.yaml")
+	st, err := Open(Options{Seed: 1, Locale: locale.EN, PersistPath: path, PersistDebounce: 20 * time.Millisecond})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	if err := st.Apply(loadTinyDoc(t)); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Flush(); err != nil {
+		t.Fatal(err)
+	}
+
+	persistPathAsDir(t, path)
+	if _, err := st.AddComment("TAP-1", "", []byte("retry-after-fail")); err != nil {
+		t.Fatal(err)
+	}
+	waitForPersistErr(t, st)
+
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+
+	b := waitForFile(t, path)
+	if !strings.Contains(string(b), "retry-after-fail") {
+		t.Fatalf("retried persist missing mutation:\n%s", b)
+	}
+	if err := st.PersistErr(); err != nil {
+		t.Fatalf("PersistErr after successful retry: %v", err)
+	}
+}
+
+// TestNegativeDebounceWritesBeforeReturn: PersistDebounce < 0 writes on
+// the mutation call, so the file is current without Flush or waiting.
+func TestNegativeDebounceWritesBeforeReturn(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state.yaml")
+	st, err := Open(Options{Seed: 1, Locale: locale.EN, PersistPath: path, PersistDebounce: -1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	if err := st.Apply(loadTinyDoc(t)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.CreateIssue(map[string]any{
+		"project": map[string]any{"key": "TAP"}, "summary": "sync-now",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("negative debounce did not write before return: %v", err)
+	}
+	if !strings.Contains(string(b), "sync-now") {
+		t.Fatalf("sync persist missing mutation:\n%s", b)
+	}
+}

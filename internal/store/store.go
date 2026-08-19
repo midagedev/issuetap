@@ -1938,6 +1938,30 @@ func (s *Store) AddComment(key, authorID string, body []byte) (model.Comment, er
 	return cm, s.markDirtyLocked()
 }
 
+// AddPageComment posts a top-level comment on a page (Cloud v1
+// POST /rest/api/content with type=comment and a page container).
+func (s *Store) AddPageComment(pageID, authorID string, body json.RawMessage) (model.PageComment, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	pg := s.pages[pageID]
+	if pg == nil {
+		return model.PageComment{}, errNotFound("page", pageID)
+	}
+	adfBody, text, err := parseADF(body)
+	if err != nil {
+		return model.PageComment{}, err
+	}
+	s.seqComment++
+	cm := model.PageComment{
+		ID: strconv.Itoa(30000 + s.seqComment), Title: "Re: " + pg.Title,
+		ParentID: pageID, BodyADF: adfBody, BodyText: text, Version: 1,
+		When:     formatConfluenceWhen(s.clk, ""),
+		AuthorID: s.userOrDefault(authorID).AccountID,
+	}
+	s.pageComments[pageID] = append(s.pageComments[pageID], cm)
+	return cm, s.markDirtyLocked()
+}
+
 // SetAssignee assigns or unassigns.
 func (s *Store) SetAssignee(key, accountID string) error {
 	s.mu.Lock()

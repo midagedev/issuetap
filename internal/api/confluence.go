@@ -365,6 +365,9 @@ type wikiContentWrite struct {
 	Ancestors []struct {
 		ID string `json:"id"`
 	} `json:"ancestors"`
+	Container *struct {
+		ID string `json:"id"`
+	} `json:"container"`
 	Version *struct {
 		Number    int    `json:"number"`
 		Message   string `json:"message"`
@@ -400,6 +403,27 @@ func (s *Server) postContent(w http.ResponseWriter, r *http.Request) {
 	var body wikiContentWrite
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil && err != io.EOF {
 		writeWikiError(w, http.StatusBadRequest, "Invalid request body")
+		return
+	}
+	if body.Type == "comment" {
+		if body.Container == nil || body.Container.ID == "" {
+			writeWikiError(w, http.StatusBadRequest, "container.id is required for a comment")
+			return
+		}
+		var raw json.RawMessage
+		if body.Body.AtlasDocFormat != nil {
+			raw = body.Body.AtlasDocFormat.Value
+		}
+		cm, err := s.st.AddPageComment(body.Container.ID, s.identity(r).AccountID, raw)
+		if err != nil {
+			if store.IsNotFound(err) {
+				writeWikiError(w, http.StatusNotFound, "No content found with id: "+body.Container.ID)
+				return
+			}
+			writeWikiWriteError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, s.commentContentJSON(r, *s.st.Page(body.Container.ID), cm))
 		return
 	}
 	if body.Type != "" && body.Type != "page" {

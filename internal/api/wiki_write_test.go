@@ -339,3 +339,54 @@ func TestWikiVersionHistorySurvivesPersist(t *testing.T) {
 		t.Fatalf("restored messages = %v", got)
 	}
 }
+
+// TestWikiPostComment is the consumer contract for GDK-381: POST content
+// with type=comment lands the comment on the page and the child-comment
+// read path returns it.
+func TestWikiPostComment(t *testing.T) {
+	ts := testServer(t, locale.EN, dialect.Cloud)
+	defer ts.Close()
+
+	created := decode(t, authPost(t, ts, "/wiki/rest/api/content", pageCreateBody(
+		"Commented", "DOCS", "", adfValue("body"), "",
+	)))
+	id, _ := created["id"].(string)
+	if id == "" {
+		t.Fatalf("create missing id: %v", created)
+	}
+
+	cm := decode(t, authPost(t, ts, "/wiki/rest/api/content", map[string]any{
+		"type":      "comment",
+		"container": map[string]any{"id": id, "type": "page"},
+		"body": map[string]any{
+			"atlas_doc_format": map[string]any{
+				"value":          adfValue("first comment"),
+				"representation": "atlas_doc_format",
+			},
+		},
+	}))
+	if cm["type"] != "comment" || cm["id"] == "" {
+		t.Fatalf("comment response: %v", cm)
+	}
+
+	got := decode(t, authGet(t, ts, "/wiki/rest/api/content/"+id+"/child/comment?expand=body.atlas_doc_format"))
+	results, _ := got["results"].([]any)
+	if len(results) != 1 {
+		t.Fatalf("child comments = %d, want 1; body=%v", len(results), got)
+	}
+
+	// Missing container is a 400, not a silent page create.
+	res := authPost(t, ts, "/wiki/rest/api/content", map[string]any{
+		"type": "comment",
+		"body": map[string]any{
+			"atlas_doc_format": map[string]any{
+				"value":          adfValue("orphan"),
+				"representation": "atlas_doc_format",
+			},
+		},
+	})
+	if res.StatusCode != http.StatusBadRequest {
+		t.Fatalf("comment without container status %d, want 400", res.StatusCode)
+	}
+	res.Body.Close()
+}

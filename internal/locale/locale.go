@@ -118,7 +118,7 @@ var catalogs = map[Code]names{
 			"to do": "해야 할 일", "in progress": "진행 중", "done": "완료",
 			"in review": "검토 중", "backlog": "Backlog",
 			"selected for development": "Selected for Development",
-			"할 일": "해야 할 일",
+			"할 일":                      "해야 할 일",
 		},
 		category: map[string]string{
 			"new": "해야 할 일", "indeterminate": "진행 중", "inprogress": "진행 중", "done": "완료",
@@ -211,6 +211,7 @@ var enFields = map[string]string{
 	"components": "Components", "fixVersions": "Fix Version/s", "created": "Created",
 	"updated": "Updated", "resolution": "Resolution", "environment": "Environment",
 	"statusCategory": "Status Category", "project": "Project", "parent": "Parent",
+	"duedate": "Due Date",
 }
 
 // koFields matches GET /rest/api/3/field on a ko_KR site (2026-08-15).
@@ -221,6 +222,7 @@ var koFields = map[string]string{
 	"components": "컴포넌트", "fixVersions": "수정 버전", "created": "만듦",
 	"updated": "업데이트", "resolution": "해결", "environment": "환경",
 	"statusCategory": "상태 범주", "project": "프로젝트", "parent": "상위 항목",
+	"duedate": "기한",
 }
 
 var jaFields = map[string]string{
@@ -230,6 +232,7 @@ var jaFields = map[string]string{
 	"components": "コンポーネント", "fixVersions": "修正バージョン", "created": "作成日",
 	"updated": "更新日", "resolution": "解決状況", "environment": "環境",
 	"statusCategory": "ステータス カテゴリ", "project": "プロジェクト", "parent": "親",
+	"duedate": "期限",
 }
 
 var deFields = map[string]string{
@@ -239,6 +242,7 @@ var deFields = map[string]string{
 	"components": "Komponenten", "fixVersions": "Lösungsversion", "created": "Erstellt",
 	"updated": "Aktualisiert", "resolution": "Lösung", "environment": "Umgebung",
 	"statusCategory": "Statuskategorie", "project": "Projekt", "parent": "Vorgänger",
+	"duedate": "Fälligkeitsdatum",
 }
 
 var enChangelog = map[string]string{

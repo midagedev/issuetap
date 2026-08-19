@@ -110,11 +110,12 @@ func (s *Server) apiData(w http.ResponseWriter, r *http.Request) {
 		users = append(users, userRow{u.AccountID, u.DisplayName, u.Email})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"projects": s.st.Projects(),
-		"issues":   issues,
-		"pages":    pages,
-		"users":    users,
-		"statuses": s.st.Statuses(),
+		"projects":      s.st.Projects(),
+		"issues":        issues,
+		"pages":         pages,
+		"users":         users,
+		"statuses":      s.st.Statuses(),
+		"fieldRegistry": s.st.FieldRegistry(),
 	})
 }
 

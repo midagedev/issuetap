@@ -13,3 +13,6 @@
 10. Public embedding surface (root package `issuetap`) + opt-in
     write-through persistence + attachment bytes that survive
     snapshot/restore.
+11. First-class `duedate`, complete editmeta for the writable system
+    fields, and a fixture/persist custom-field registry (kind + options)
+    that both editmeta and UpdateIssue derive from.

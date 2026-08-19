@@ -47,7 +47,7 @@ func Inventory() []Route {
 		{Method: "GET", Path: "/rest/api/{v}/issue/{key}/changelog", Level: Supported, Notes: "values/total/isLast", Cloud: true, DC: true},
 		{Method: "GET", Path: "/rest/api/{v}/issue/{key}/comment", Level: Supported, Notes: "startAt/maxResults/total", Cloud: true, DC: true},
 		{Method: "GET", Path: "/rest/api/{v}/issue/{key}/transitions", Level: Supported, Cloud: true, DC: true},
-		{Method: "GET", Path: "/rest/api/{v}/issue/{key}/editmeta", Level: Partial, Notes: "summary/labels/priority/assignee", Cloud: true, DC: true},
+		{Method: "GET", Path: "/rest/api/{v}/issue/{key}/editmeta", Level: Partial, Notes: "summary/description/labels/priority/assignee/duedate/parent/issuetype + fixture custom fields; option allowedValues", Cloud: true, DC: true},
 		{Method: "GET", Path: "/rest/api/{v}/issue/createmeta", Level: Partial, Notes: "projects + issue types", Cloud: true, DC: true},
 		{Method: "GET", Path: "/rest/api/{v}/filter/my", Level: Supported, Cloud: true, DC: true},
 		{Method: "GET", Path: "/rest/api/{v}/user/search", Level: Supported, Cloud: true, DC: true},

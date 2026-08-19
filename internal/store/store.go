@@ -321,6 +321,7 @@ func defaultFields() []model.FieldInfo {
 		{"labels", "array"}, {"components", "array"}, {"fixVersions", "array"},
 		{"created", "datetime"}, {"updated", "datetime"}, {"resolution", "resolution"},
 		{"environment", "string"}, {"statusCategory", "statusCategory"}, {"parent", "issuelink"},
+		{"duedate", "date"},
 	}
 	out := make([]model.FieldInfo, 0, len(sys))
 	for _, f := range sys {
@@ -413,11 +414,7 @@ func (s *Store) Apply(doc fixtures.Doc) error {
 		s.resolutions[r.ID] = &model.Resolution{ID: r.ID, Name: r.Name}
 	}
 	for _, f := range doc.Fields {
-		s.fields = append(s.fields, model.FieldInfo{
-			ID: f.ID, Key: f.ID, Name: f.Name, Custom: f.Custom,
-			Schema:    model.FieldSchema{Type: f.Type},
-			Orderable: true, Navigable: true, Searchable: true,
-		})
+		s.upsertField(f)
 	}
 	for _, f := range doc.Filters {
 		s.filters = append(s.filters, model.Filter{
@@ -706,6 +703,7 @@ func (s *Store) putIssue(in fixtures.Issue) error {
 		Updated:      updated,
 		Custom:       in.Custom,
 	}
+	promoteDueDateFromCustom(iss)
 	for _, n := range in.Components {
 		iss.Components = append(iss.Components, model.Named{ID: slugID(n), Name: n})
 	}
@@ -1940,7 +1938,16 @@ func (s *Store) UpdateIssue(key string, fields, update map[string]any) error {
 			iss.IssueTypeID = pickID(v)
 		case "parent":
 			iss.ParentKey = pickKey(v)
+		case "duedate":
+			if err := setDueDate(iss, v); err != nil {
+				return err
+			}
+		case "assignee":
+			iss.AssigneeID = pickID(v)
 		default:
+			if err := s.validateCustomWriteLocked(k, v); err != nil {
+				return err
+			}
 			if iss.Custom == nil {
 				iss.Custom = map[string]any{}
 			}
@@ -2085,14 +2092,22 @@ func (s *Store) CreateIssue(fields map[string]any) (*model.Issue, error) {
 	}
 	iss.CreatorID = iss.ReporterID
 	s.setDesc(iss, fields["description"])
+	if _, ok := fields["duedate"]; ok {
+		if err := setDueDate(iss, fields["duedate"]); err != nil {
+			return nil, err
+		}
+	}
 	known := map[string]bool{
 		"project": true, "summary": true, "issuetype": true, "priority": true,
 		"assignee": true, "reporter": true, "labels": true, "parent": true,
-		"description": true,
+		"description": true, "duedate": true,
 	}
 	for k, v := range fields {
 		if known[k] {
 			continue
+		}
+		if err := s.validateCustomWriteLocked(k, v); err != nil {
+			return nil, err
 		}
 		if iss.Custom == nil {
 			iss.Custom = map[string]any{}
@@ -2202,6 +2217,28 @@ func (e notFoundError) Error() string { return e.kind + " " + e.id + " not found
 
 func errNotFound(kind, id string) error { return notFoundError{kind, id} }
 
+// FieldError is a per-field write rejection (Jira's errors map).
+type FieldError struct {
+	Field string
+	Msg   string
+}
+
+func (e FieldError) Error() string {
+	if e.Field == "" {
+		return e.Msg
+	}
+	return e.Field + ": " + e.Msg
+}
+
+// AsFieldError unwraps a FieldError.
+func AsFieldError(err error) (FieldError, bool) {
+	var fe FieldError
+	if errors.As(err, &fe) {
+		return fe, true
+	}
+	return FieldError{}, false
+}
+
 // IsNotFound reports a missing resource.
 func IsNotFound(err error) bool {
 	_, ok := err.(notFoundError)
@@ -2264,6 +2301,8 @@ func (s *Store) snapshotLocked() fixtures.Doc {
 		})
 	}
 	sort.Slice(d.IssueTypes, func(i, j int) bool { return d.IssueTypes[i].ID < d.IssueTypes[j].ID })
+	d.Fields = fixtureFieldsFromStore(s.fields)
+	sort.Slice(d.Fields, func(i, j int) bool { return d.Fields[i].ID < d.Fields[j].ID })
 	keys := make([]string, 0, len(s.issues))
 	for k := range s.issues {
 		keys = append(keys, k)

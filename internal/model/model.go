@@ -147,6 +147,15 @@ type FieldInfo struct {
 	Orderable  bool        `json:"orderable"`
 	Navigable  bool        `json:"navigable"`
 	Searchable bool        `json:"searchable"`
+	// Options is the editmeta allowlist for option / option-array fields.
+	// It is not part of GET /field.
+	Options []FieldOption `json:"-"`
+}
+
+// FieldOption is one allowed value for an option-shaped custom field.
+type FieldOption struct {
+	ID    string `json:"id"`
+	Value string `json:"value"`
 }
 
 // FieldSchema is the Jira field schema fragment.

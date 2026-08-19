@@ -66,7 +66,7 @@ Jira layout `2006-01-02T15:04:05.000-0700`.
 | Filters | `GET /filter/my` | Supported | |
 | Users | `GET /user/search` | Supported | |
 | Transitions | `GET/POST /issue/{key}/transitions` | Supported | Synthetic transitions to every other status. |
-| Edit meta | `GET /issue/{key}/editmeta` | Partial | summary / labels / assignee / priority. |
+| Edit meta | `GET /issue/{key}/editmeta` | Partial | summary, description, labels, priority (+allowedValues), assignee, duedate, parent, issuetype (+allowedValues), plus fixture custom fields (kind schema; option kinds include allowedValues). Not per-screen field config. |
 | Create meta | `GET /issue/createmeta` | Partial | projects + types. |
 | Writes | `POST /issue`, `PUT /issue/{key}`, `POST …/comment`, `PUT …/assignee`, `POST …/attachments` | Supported | Mutate the in-memory graph. |
 | Attachments | `GET /attachment/{id}`, `GET /attachment/content/{id}` | Supported | 302 to `/file/{uuid}/binary?name=`; the target serves the stored bytes. |

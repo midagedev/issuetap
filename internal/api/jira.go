@@ -466,6 +466,10 @@ func (s *Server) putIssue(w http.ResponseWriter, r *http.Request, key string) {
 			writeJiraError(w, http.StatusNotFound, "Issue does not exist")
 			return
 		}
+		if fe, ok := store.AsFieldError(err); ok {
+			writeJiraFieldErrors(w, map[string]string{fe.Field: fe.Msg})
+			return
+		}
 		writeJiraError(w, http.StatusBadRequest, err.Error())
 		return
 	}
@@ -595,16 +599,14 @@ func (s *Server) putAssignee(w http.ResponseWriter, r *http.Request, key string)
 }
 
 func (s *Server) getEditMeta(w http.ResponseWriter, r *http.Request, key string) {
-	if s.st.Issue(key) == nil {
-		writeJiraError(w, http.StatusNotFound, "Issue does not exist")
+	fields, err := s.st.EditMeta(key)
+	if err != nil {
+		if store.IsNotFound(err) {
+			writeJiraError(w, http.StatusNotFound, "Issue does not exist")
+			return
+		}
+		writeJiraError(w, http.StatusBadRequest, err.Error())
 		return
-	}
-	fields := map[string]any{
-		"summary":   map[string]any{"required": true, "operations": []string{"set"}, "schema": map[string]any{"type": "string", "system": "summary"}},
-		"labels":    map[string]any{"required": false, "operations": []string{"add", "set", "remove"}, "schema": map[string]any{"type": "array", "items": "string", "system": "labels"}},
-		"assignee":  map[string]any{"required": false, "operations": []string{"set"}, "schema": map[string]any{"type": "user", "system": "assignee"}},
-		"priority":  map[string]any{"required": false, "operations": []string{"set"}, "schema": map[string]any{"type": "priority", "system": "priority"}},
-		"issuetype": map[string]any{"required": false, "operations": []string{"set"}, "schema": map[string]any{"type": "issuetype", "system": "issuetype"}},
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"fields": fields})
 }
@@ -619,6 +621,10 @@ func (s *Server) postIssue(w http.ResponseWriter, r *http.Request) {
 	}
 	iss, err := s.st.CreateIssue(body.Fields)
 	if err != nil {
+		if fe, ok := store.AsFieldError(err); ok {
+			writeJiraFieldErrors(w, map[string]string{fe.Field: fe.Msg})
+			return
+		}
 		writeJiraError(w, http.StatusBadRequest, err.Error())
 		return
 	}

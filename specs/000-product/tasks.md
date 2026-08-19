@@ -15,3 +15,8 @@
 - [x] Attachment bytes survive snapshot/restore (`text` inline / `dataBase64`)
 - [x] Confluence page version history (`GET /wiki/rest/api/content/{id}/version`)
 - [x] Wiki writes (`POST/PUT /wiki/rest/api/content`) with optimistic concurrency and persistable history
+- [x] First-class `duedate` on UpdateIssue / CreateIssue (YYYY-MM-DD, 400 on bad format)
+- [x] editmeta advertises summary, description, labels, priority, assignee, duedate, parent, issuetype
+- [x] Fixture/persist custom-field registry (kind + options) served as editmeta allowedValues
+- [x] UpdateIssue validates registered option fields; unregistered custom ids stay free
+- [x] Advertised-field ↔ PUT acceptance contract tests (FAIL-first)

@@ -75,10 +75,19 @@ type Resolution struct {
 }
 
 type Field struct {
-	ID     string `json:"id" yaml:"id"`
-	Name   string `json:"name" yaml:"name"`
-	Custom bool   `json:"custom,omitempty" yaml:"custom,omitempty"`
-	Type   string `json:"type,omitempty" yaml:"type,omitempty"`
+	ID      string        `json:"id" yaml:"id"`
+	Name    string        `json:"name" yaml:"name"`
+	Custom  bool          `json:"custom,omitempty" yaml:"custom,omitempty"`
+	Type    string        `json:"type,omitempty" yaml:"type,omitempty"`
+	Items   string        `json:"items,omitempty" yaml:"items,omitempty"`
+	Options []FieldOption `json:"options,omitempty" yaml:"options,omitempty"`
+}
+
+// FieldOption is one allowed value for an option / option-array custom field.
+// id is the stable key (never the localized value).
+type FieldOption struct {
+	ID    string `json:"id" yaml:"id"`
+	Value string `json:"value" yaml:"value"`
 }
 
 type Filter struct {

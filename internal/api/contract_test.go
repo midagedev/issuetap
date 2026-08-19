@@ -26,6 +26,9 @@ package api_test
 // | Confluence child/comment | TestPageComments | TestPageCommentsEmpty |
 // | unsupported_endpoint 501 | TestUnsupported | TestUnsupportedNot404 |
 // | writes: comment / transition / assignee | TestWrites | TestWriteMissingIssue |
+// | Edit meta system fields + allowedValues | TestEditMetaSystemFields | TestEditMetaMissingIssue |
+// | Edit meta advertised field is PUT-accepted | TestEditMetaAdvertisedFieldsAccepted | TestPutDuedateRejectedWhenMalformed |
+// | Custom option registry validation | TestRegisteredOptionRejectsUnknownID | TestUnregisteredCustomFieldStillFree |
 // | DC startAt search | TestDCSearch | TestDCWikiMarkupBody |
 // | determinism: same seed → same snapshot | TestDeterminism | (diff empty) |
 

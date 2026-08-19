@@ -50,6 +50,26 @@ wiki pages, and page version history (including `version.message`).
 Ids continue (no reuse) and new mutations are stamped after the restored
 rows, so an `updated >=` delta sync does not skip them.
 
+### 5. Standalone workspace edits through editmeta
+
+A client (gadak standalone, or any other) asks
+`GET /rest/api/3/issue/{key}/editmeta` what it may write. The response
+lists every first-class writable system field — summary, description,
+labels, priority (with `allowedValues` from the priority catalog),
+assignee, duedate, parent, issuetype (with `allowedValues` from the type
+catalog) — plus every custom field defined in the fixture/persist
+registry. Option-shaped custom fields include `allowedValues`.
+`PUT /issue/{key}` accepts every advertised field. `duedate` is a
+first-class `YYYY-MM-DD` string on the issue (not a `Custom` map entry);
+a malformed date is HTTP 400. A registered option field rejects an
+unknown option id with HTTP 400; an unregistered custom field id still
+stores freely (backward compatible).
+
+The field registry is the single owner of "what is editable and which
+values are allowed". editmeta and UpdateIssue both derive from it. There
+is no admin UI for the registry in this version — fixtures and persist
+are the source.
+
 ## Non-goals
 
 - Being a usable issue tracker

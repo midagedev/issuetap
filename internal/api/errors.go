@@ -44,6 +44,14 @@ func writeJiraError(w http.ResponseWriter, status int, messages ...string) {
 	})
 }
 
+// writeJiraFieldErrors is Jira's per-field 400 (errors.<id> = reason).
+func writeJiraFieldErrors(w http.ResponseWriter, fields map[string]string) {
+	writeJSON(w, http.StatusBadRequest, jiraError{
+		ErrorMessages: []string{},
+		Errors:        fields,
+	})
+}
+
 // writeUnsupported is the honest coverage-gap response. A 404 would look
 // like "your client is broken"; a plausible lie would look like "the
 // endpoint works". Consumers key on issuetap.code == "unsupported_endpoint".

@@ -1317,6 +1317,22 @@ func (s *Store) Project(key string) *model.Project {
 	return &cp
 }
 
+// projectByIDOrKey matches Cloud's {projectIdOrKey} path segment.
+func (s *Store) projectByIDOrKey(idOrKey string) *model.Project {
+	if p := s.Project(idOrKey); p != nil {
+		return p
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	for _, p := range s.projects {
+		if p.ID == idOrKey {
+			cp := *p
+			return &cp
+		}
+	}
+	return nil
+}
+
 // Statuses lists every status (localized copies).
 func (s *Store) Statuses() []model.Status {
 	s.mu.RLock()
@@ -2167,10 +2183,13 @@ func (s *Store) CreateIssue(fields map[string]any) (*model.Issue, error) {
 	if project == "" {
 		return nil, fmt.Errorf("project is required")
 	}
+	summary, _ := fields["summary"].(string)
+	if strings.TrimSpace(summary) == "" {
+		return nil, FieldError{Field: "summary", Msg: "You must specify a summary of the issue."}
+	}
 	if _, ok := s.projects[project]; !ok {
 		s.putProject(fixtures.Project{Key: project, Name: project})
 	}
-	summary, _ := fields["summary"].(string)
 	s.seqIssue++
 	n := s.nextKeyNum(project)
 	key := fmt.Sprintf("%s-%d", project, n)

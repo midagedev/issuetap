@@ -49,6 +49,7 @@ func Inventory() []Route {
 		{Method: "GET", Path: "/rest/api/{v}/issue/{key}/transitions", Level: Supported, Cloud: true, DC: true},
 		{Method: "GET", Path: "/rest/api/{v}/issue/{key}/editmeta", Level: Partial, Notes: "summary/description/labels/priority/assignee/duedate/parent/issuetype + fixture custom fields; option allowedValues", Cloud: true, DC: true},
 		{Method: "GET", Path: "/rest/api/{v}/issue/createmeta", Level: Partial, Notes: "projects + issue types", Cloud: true, DC: true},
+		{Method: "GET", Path: "/rest/api/{v}/issue/createmeta/{projectIdOrKey}/issuetypes/{id}", Level: Partial, Notes: "fields list + startAt/maxResults/total; required/hasDefaultValue from CreateIssue; not per-screen", Cloud: true, DC: true},
 		{Method: "GET", Path: "/rest/api/{v}/filter/my", Level: Supported, Cloud: true, DC: true},
 		{Method: "GET", Path: "/rest/api/{v}/user/search", Level: Supported, Notes: "query=me is the /myself identity", Cloud: true, DC: true},
 		{Method: "GET", Path: "/rest/api/{v}/attachment/{id}", Level: Supported, Cloud: true, DC: true},

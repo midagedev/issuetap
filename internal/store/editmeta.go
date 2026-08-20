@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/midagedev/issuetap/internal/fixtures"
+	"github.com/midagedev/issuetap/internal/locale"
 	"github.com/midagedev/issuetap/internal/model"
 )
 
@@ -44,6 +45,67 @@ func systemEditSpecs() []editFieldSpec {
 	}
 }
 
+type createFieldSpec struct {
+	id         string
+	required   bool
+	hasDefault bool
+	operations []string
+	typ        string
+	items      string
+	allowed    string // priority | issuetype | ""
+}
+
+// systemCreateSpecs is what CreateIssue actually requires and fills.
+// required/hasDefaultValue must stay in lockstep with CreateIssue.
+func systemCreateSpecs() []createFieldSpec {
+	return []createFieldSpec{
+		{id: "project", required: true, operations: []string{"set"}, typ: "project"},
+		{id: "summary", required: true, operations: []string{"set"}, typ: "string"},
+		{id: "issuetype", required: true, hasDefault: true, operations: []string{"set"}, typ: "issuetype", allowed: "issuetype"},
+		{id: "reporter", required: true, hasDefault: true, operations: []string{"set"}, typ: "user"},
+		{id: "priority", hasDefault: true, operations: []string{"set"}, typ: "priority", allowed: "priority"},
+		{id: "description", operations: []string{"set"}, typ: "string"},
+		{id: "labels", operations: []string{"add", "set", "remove"}, typ: "array", items: "string"},
+		{id: "assignee", operations: []string{"set"}, typ: "user"},
+		{id: "duedate", operations: []string{"set"}, typ: "date"},
+		{id: "parent", operations: []string{"set"}, typ: "issuelink"},
+	}
+}
+
+func (s *Store) priorityAllowedValues() []any {
+	av := make([]any, 0)
+	for _, p := range s.Priorities() {
+		row := map[string]any{"id": p.ID, "name": p.Name}
+		if p.StatusColor != "" {
+			row["statusColor"] = p.StatusColor
+		}
+		av = append(av, row)
+	}
+	return av
+}
+
+func (s *Store) issueTypeAllowedValues() []any {
+	av := make([]any, 0)
+	for _, t := range s.IssueTypes() {
+		av = append(av, map[string]any{
+			"id": t.ID, "name": t.Name,
+			"untranslatedName": first(t.Untranslated, t.Name),
+			"hierarchyLevel":   t.HierarchyLevel,
+			"subtask":          t.Subtask,
+		})
+	}
+	return av
+}
+
+func (s *Store) attachAllowed(meta map[string]any, allowed string) {
+	switch allowed {
+	case "priority":
+		meta["allowedValues"] = s.priorityAllowedValues()
+	case "issuetype":
+		meta["allowedValues"] = s.issueTypeAllowedValues()
+	}
+}
+
 // EditMeta is the fields object of GET /issue/{key}/editmeta.
 // System fields and registered custom fields share this table; UpdateIssue
 // accepts every id this function advertises.
@@ -62,29 +124,7 @@ func (s *Store) EditMeta(key string) (map[string]any, error) {
 			"operations": append([]string{}, spec.operations...),
 			"schema":     schema,
 		}
-		switch spec.allowed {
-		case "priority":
-			av := make([]any, 0)
-			for _, p := range s.Priorities() {
-				row := map[string]any{"id": p.ID, "name": p.Name}
-				if p.StatusColor != "" {
-					row["statusColor"] = p.StatusColor
-				}
-				av = append(av, row)
-			}
-			meta["allowedValues"] = av
-		case "issuetype":
-			av := make([]any, 0)
-			for _, t := range s.IssueTypes() {
-				av = append(av, map[string]any{
-					"id": t.ID, "name": t.Name,
-					"untranslatedName": first(t.Untranslated, t.Name),
-					"hierarchyLevel":   t.HierarchyLevel,
-					"subtask":          t.Subtask,
-				})
-			}
-			meta["allowedValues"] = av
-		}
+		s.attachAllowed(meta, spec.allowed)
 		out[spec.id] = meta
 	}
 	for _, f := range s.Fields() {
@@ -92,6 +132,58 @@ func (s *Store) EditMeta(key string) (map[string]any, error) {
 			continue
 		}
 		out[f.ID] = customEditMeta(f)
+	}
+	return out, nil
+}
+
+// CreateFields is the fields list of
+// GET /issue/createmeta/{projectIdOrKey}/issuetypes/{issueTypeId}.
+// Flags are derived from CreateIssue so advertisement cannot drift from
+// acceptance. Pagination is applied by the HTTP handler.
+func (s *Store) CreateFields(projectIDOrKey, issueTypeID string) ([]map[string]any, error) {
+	if s.projectByIDOrKey(projectIDOrKey) == nil {
+		return nil, errNotFound("project", projectIDOrKey)
+	}
+	if s.IssueType(issueTypeID) == nil {
+		return nil, errNotFound("issuetype", issueTypeID)
+	}
+	loc := s.Locale()
+	out := make([]map[string]any, 0, 16)
+	for _, spec := range systemCreateSpecs() {
+		schema := map[string]any{"type": spec.typ, "system": spec.id}
+		if spec.items != "" {
+			schema["items"] = spec.items
+		}
+		row := map[string]any{
+			"fieldId":         spec.id,
+			"key":             spec.id,
+			"name":            locale.FieldName(loc, spec.id, spec.id),
+			"required":        spec.required,
+			"hasDefaultValue": spec.hasDefault,
+			"operations":      append([]string{}, spec.operations...),
+			"schema":          schema,
+		}
+		s.attachAllowed(row, spec.allowed)
+		out = append(out, row)
+	}
+	for _, f := range s.Fields() {
+		if !f.Custom {
+			continue
+		}
+		meta := customEditMeta(f)
+		row := map[string]any{
+			"fieldId":         f.ID,
+			"key":             f.ID,
+			"name":            f.Name,
+			"required":        false,
+			"hasDefaultValue": false,
+			"operations":      meta["operations"],
+			"schema":          meta["schema"],
+		}
+		if av, ok := meta["allowedValues"]; ok {
+			row["allowedValues"] = av
+		}
+		out = append(out, row)
 	}
 	return out, nil
 }

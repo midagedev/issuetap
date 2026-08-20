@@ -20,3 +20,7 @@
 - [x] Fixture/persist custom-field registry (kind + options) served as editmeta allowedValues
 - [x] UpdateIssue validates registered option fields; unregistered custom ids stay free
 - [x] Advertised-field ↔ PUT acceptance contract tests (FAIL-first)
+- [x] GET /issue/createmeta/{project}/issuetypes/{id} paginated fields list
+- [x] CreateIssue rejects empty/missing summary (Jira per-field 400)
+- [x] Advertised-required ↔ POST /issue contract tests (FAIL-first)
+- [x] Gadak CreateFields conformance: required set from the new endpoint

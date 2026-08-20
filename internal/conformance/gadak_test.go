@@ -375,3 +375,89 @@ func TestGadakMirrorsPageVersionHistory(t *testing.T) {
 		t.Errorf("page_versions has %d body column(s); stamps only", cols)
 	}
 }
+
+// TestGadakCreateFieldsRequiredSet is the seam for GET
+// /issue/createmeta/{project}/issuetypes/{id}: gadak's CreateFields client
+// (internal/jira, already on gadak main) must actually receive the required
+// set from a live issuetap. Gadak's own tests hit an httptest fake; this is
+// the only proof the two sides agree.
+func TestGadakCreateFieldsRequiredSet(t *testing.T) {
+	src := gadakSrc(t)
+	origPath := filepath.Join(src, "internal", "jira", "create_fields_test.go")
+	orig, err := os.ReadFile(origPath)
+	if err != nil {
+		t.Fatalf("read gadak create_fields_test.go: %v — gadak predates CreateFields?", err)
+	}
+
+	root := repoRoot(t)
+	base, _ := startIssuetap(t, filepath.Join(root, "examples/fixtures/tiny.yaml"), locale.EN, nil)
+
+	patched := string(orig)
+	if !strings.Contains(patched, "\t\"os\"\n") {
+		patched = strings.Replace(patched, "\t\"net/http\"\n", "\t\"net/http\"\n\t\"os\"\n", 1)
+	}
+	patched += `
+
+func TestIssuetapCreateFieldsRequiredSet(t *testing.T) {
+	site := os.Getenv("ISSUETAP_BASE")
+	if site == "" {
+		t.Fatal("ISSUETAP_BASE unset")
+	}
+	c := New(site, "you@example.com", "issuetap")
+	c.Retries = 1
+	c.Backoff = 0
+	got, err := c.CreateFields(context.Background(), "TAP", "10003")
+	if err != nil {
+		t.Fatal(err)
+	}
+	byID := map[string]CreateFieldMeta{}
+	for _, f := range got {
+		byID[f.FieldID] = f
+	}
+	for _, id := range []string{"project", "summary", "issuetype", "reporter"} {
+		f, ok := byID[id]
+		if !ok {
+			t.Errorf("missing %s in %+v", id, got)
+			continue
+		}
+		if !f.Required {
+			t.Errorf("%s required=false", id)
+		}
+	}
+	if f := byID["reporter"]; !f.HasDefaultValue {
+		t.Errorf("reporter hasDefaultValue=false")
+	}
+	if f := byID["issuetype"]; !f.HasDefaultValue {
+		t.Errorf("issuetype hasDefaultValue=false")
+	}
+	if f := byID["summary"]; f.HasDefaultValue {
+		t.Errorf("summary hasDefaultValue=true")
+	}
+}
+`
+	repl := filepath.Join(t.TempDir(), "create_fields_test.go")
+	if err := os.WriteFile(repl, []byte(patched), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	overlayPath := filepath.Join(t.TempDir(), "overlay.json")
+	overlay, err := json.Marshal(map[string]any{"Replace": map[string]string{origPath: repl}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(overlayPath, overlay, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := exec.Command("go", "test", "-overlay", overlayPath, "-count=1", "-timeout", "60s",
+		"-run", "^TestIssuetapCreateFieldsRequiredSet$", ".")
+	cmd.Dir = filepath.Join(src, "internal", "jira")
+	cmd.Env = append(os.Environ(),
+		"CGO_ENABLED=0",
+		"ISSUETAP_BASE="+base,
+	)
+	out, err := cmd.CombinedOutput()
+	t.Logf("gadak CreateFields probe:\n%s", out)
+	if err != nil {
+		t.Fatalf("gadak CreateFields against issuetap: %v", err)
+	}
+}

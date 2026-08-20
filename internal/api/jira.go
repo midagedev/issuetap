@@ -64,6 +64,8 @@ func (s *Server) handleJira(w http.ResponseWriter, r *http.Request, path string)
 		s.getUserSearch(w, r)
 	case r.Method == http.MethodGet && suffix == "/issue/createmeta":
 		s.getCreateMeta(w, r)
+	case r.Method == http.MethodGet && strings.HasPrefix(suffix, "/issue/createmeta/"):
+		s.getCreateMetaFields(w, r, strings.TrimPrefix(suffix, "/issue/createmeta/"))
 	case r.Method == http.MethodPost && suffix == "/issue":
 		s.postIssue(w, r)
 	case strings.HasPrefix(suffix, "/issue/"):
@@ -469,6 +471,50 @@ func (s *Server) getCreateMeta(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"projects": projects})
+}
+
+func (s *Server) getCreateMetaFields(w http.ResponseWriter, r *http.Request, rest string) {
+	rest = strings.Trim(rest, "/")
+	proj, typeID, ok := strings.Cut(rest, "/issuetypes/")
+	if !ok || proj == "" || typeID == "" || strings.Contains(typeID, "/") {
+		writeJiraError(w, http.StatusNotFound, "No project or issue type could be found.")
+		return
+	}
+	all, err := s.st.CreateFields(proj, typeID)
+	if err != nil {
+		if store.IsNotFound(err) {
+			writeJiraError(w, http.StatusNotFound, err.Error())
+			return
+		}
+		writeJiraError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	startAt := atoiDefault(r.URL.Query().Get("startAt"), 0)
+	maxResults := atoiDefault(r.URL.Query().Get("maxResults"), 50)
+	if startAt < 0 {
+		startAt = 0
+	}
+	if maxResults <= 0 {
+		maxResults = 50
+	}
+	total := len(all)
+	if startAt > total {
+		startAt = total
+	}
+	end := startAt + maxResults
+	if end > total {
+		end = total
+	}
+	page := all[startAt:end]
+	if page == nil {
+		page = []map[string]any{}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"fields":     page,
+		"startAt":    startAt,
+		"maxResults": maxResults,
+		"total":      total,
+	})
 }
 
 func (s *Server) handleIssue(w http.ResponseWriter, r *http.Request, rest string) {

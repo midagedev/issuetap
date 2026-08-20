@@ -16,3 +16,8 @@
 11. First-class `duedate`, complete editmeta for the writable system
     fields, and a fixture/persist custom-field registry (kind + options)
     that both editmeta and UpdateIssue derive from.
+12. Create-meta fields
+    (`GET /issue/createmeta/{projectIdOrKey}/issuetypes/{id}`) as a
+    paginated `fields` list whose required/hasDefaultValue flags are
+    derived from CreateIssue (summary required; issuetype/reporter/priority
+    have defaults).

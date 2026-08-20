@@ -29,6 +29,9 @@ package api_test
 // | writes: comment / transition / assignee | TestWrites | TestWriteMissingIssue |
 // | Edit meta system fields + allowedValues | TestEditMetaSystemFields | TestEditMetaMissingIssue |
 // | Edit meta advertised field is PUT-accepted | TestEditMetaAdvertisedFieldsAccepted | TestPutDuedateRejectedWhenMalformed |
+// | Create meta fields list + required/defaults | TestCreateMetaFieldsShape | TestCreateMetaFieldsMissingProjectAndType |
+// | Create meta pagination | TestCreateMetaFieldsPagination | TestCreateMetaFieldsPaginationEmptyPage |
+// | Create advertised required ↔ POST | TestCreateMetaFieldsRoundTrip | TestCreateIssueRejectsEmptySummary |
 // | Custom option registry validation | TestRegisteredOptionRejectsUnknownID | TestUnregisteredCustomFieldStillFree |
 // | DC startAt search | TestDCSearch | TestDCWikiMarkupBody |
 // | determinism: same seed → same snapshot | TestDeterminism | (diff empty) |

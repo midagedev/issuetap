@@ -70,6 +70,29 @@ values are allowed". editmeta and UpdateIssue both derive from it. There
 is no admin UI for the registry in this version — fixtures and persist
 are the source.
 
+### 6. Standalone workspace creates through createmeta fields
+
+A client (gadak standalone, or any other) asks
+`GET /rest/api/3/issue/createmeta/{projectIdOrKey}/issuetypes/{id}`
+what it must send to create. The response is a paginated `fields`
+**list** (editmeta is a map — the shapes differ) with
+`startAt` / `maxResults` / `total`. Each row carries `fieldId`,
+`name`, `required`, `hasDefaultValue`, and `schema`.
+
+The advertised set is derived from what `CreateIssue` actually
+requires and fills:
+
+- required, no default: `project`, `summary`
+- required, filled by issuetap when omitted: `issuetype`, `reporter`
+- optional, filled by issuetap when omitted: `priority`
+- optional: `description`, `labels`, `assignee`, `duedate`, `parent`,
+  plus every custom field in the fixture/persist registry
+
+`POST /issue` rejects a missing or empty `summary` with Jira's
+per-field 400 (`errors.summary`). Filling every advertised required
+field succeeds. A missing project or issue type on the createmeta
+fields URL is HTTP 404 (the route is implemented — not 501).
+
 ## Non-goals
 
 - Being a usable issue tracker

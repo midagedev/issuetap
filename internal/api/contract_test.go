@@ -809,3 +809,35 @@ func TestTruncateBytesCutsBody(t *testing.T) {
 		t.Fatal("truncated body is empty")
 	}
 }
+
+// TestPostProject is the consumer contract for gadak's `project create`
+// (GDK-391): POST /rest/api/3/project lands a project the read endpoints
+// then list; a duplicate key and a bad key shape are 400s.
+func TestPostProject(t *testing.T) {
+	ts := testServer(t, locale.EN, dialect.Cloud)
+	defer ts.Close()
+
+	created := decode(t, authPost(t, ts, "/rest/api/3/project", map[string]any{
+		"key": "IDEA", "name": "Ideas",
+	}))
+	if created["key"] != "IDEA" || created["id"] == "" {
+		t.Fatalf("create response: %v", created)
+	}
+
+	got := decode(t, authGet(t, ts, "/rest/api/3/project/IDEA"))
+	if got["name"] != "Ideas" {
+		t.Fatalf("read-back: %v", got)
+	}
+
+	res := authPost(t, ts, "/rest/api/3/project", map[string]any{"key": "IDEA"})
+	if res.StatusCode != http.StatusBadRequest {
+		t.Fatalf("duplicate key status %d, want 400", res.StatusCode)
+	}
+	res.Body.Close()
+
+	res = authPost(t, ts, "/rest/api/3/project", map[string]any{"key": "bad-key"})
+	if res.StatusCode != http.StatusBadRequest {
+		t.Fatalf("invalid key status %d, want 400", res.StatusCode)
+	}
+	res.Body.Close()
+}

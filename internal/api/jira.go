@@ -48,6 +48,8 @@ func (s *Server) handleJira(w http.ResponseWriter, r *http.Request, path string)
 		s.getProjectSearch(w, r)
 	case r.Method == http.MethodGet && suffix == "/project":
 		s.getProjects(w, r)
+	case r.Method == http.MethodPost && suffix == "/project":
+		s.postProject(w, r)
 	case r.Method == http.MethodGet && strings.HasPrefix(suffix, "/project/"):
 		s.getProject(w, r, strings.TrimPrefix(suffix, "/project/"))
 	case r.Method == http.MethodPost && suffix == "/search/jql":
@@ -223,6 +225,46 @@ func (s *Server) getProject(w http.ResponseWriter, r *http.Request, key string) 
 		return
 	}
 	writeJSON(w, http.StatusOK, s.projectJSON(p))
+}
+
+// postProject is Cloud v3 POST /rest/api/3/project, trimmed to the fields
+// gadak sends: key and name. Jira validates keys as uppercase letters and
+// digits starting with a letter; the same rule keeps fixtures portable.
+func (s *Server) postProject(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Key  string `json:"key"`
+		Name string `json:"name"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeJiraError(w, http.StatusBadRequest, "Invalid request body")
+		return
+	}
+	if !validProjectKey(body.Key) {
+		writeJiraError(w, http.StatusBadRequest, "Project key must start with an uppercase letter, followed by uppercase letters and numbers.")
+		return
+	}
+	p, err := s.st.CreateProject(body.Key, body.Name)
+	if err != nil {
+		writeJiraError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusCreated, map[string]any{
+		"id": p.ID, "key": p.Key,
+		"self": s.selfURL(r, "/rest/api/3/project/"+p.Key),
+	})
+}
+
+func validProjectKey(key string) bool {
+	if key == "" || key[0] < 'A' || key[0] > 'Z' {
+		return false
+	}
+	for i := 1; i < len(key); i++ {
+		c := key[i]
+		if (c < 'A' || c > 'Z') && (c < '0' || c > '9') {
+			return false
+		}
+	}
+	return true
 }
 
 func (s *Server) projectJSON(p *model.Project) map[string]any {

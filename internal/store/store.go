@@ -694,6 +694,25 @@ func (s *Store) putProject(p fixtures.Project) {
 	}
 }
 
+// CreateProject adds a project (Cloud v3 POST /rest/api/3/project). A
+// duplicate key is an error, matching Jira's 400.
+func (s *Store) CreateProject(key, name string) (*model.Project, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if key == "" {
+		return nil, fmt.Errorf("project key is required")
+	}
+	if s.projects[key] != nil {
+		return nil, fmt.Errorf("Project '%s' uses this project key.", key)
+	}
+	if name == "" {
+		name = key
+	}
+	s.putProject(fixtures.Project{Key: key, Name: name})
+	p := *s.projects[key]
+	return &p, s.markDirtyLocked()
+}
+
 func (s *Store) putStatus(st fixtures.Status) {
 	cat := st.Category
 	if cat == "" {

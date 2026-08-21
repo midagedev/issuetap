@@ -630,6 +630,8 @@ func (s *Server) handleIssue(w http.ResponseWriter, r *http.Request, rest string
 		s.getTransitions(w, r, key)
 	case extra == "transitions" && r.Method == http.MethodPost:
 		s.postTransition(w, r, key)
+	case extra == "claim" && r.Method == http.MethodPost:
+		s.postClaim(w, r, key)
 	case extra == "assignee" && r.Method == http.MethodPut:
 		s.putAssignee(w, r, key)
 	case extra == "editmeta" && r.Method == http.MethodGet:
@@ -797,6 +799,43 @@ func (s *Server) postTransition(w http.ResponseWriter, r *http.Request, key stri
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// postClaim is POST /issue/{key}/claim (issuetap extension, gadak GDK-591):
+// the actor is the request identity — X-Issuetap-Actor, never a body field.
+// The body only selects how: an optional transitionId and takeOver.
+func (s *Server) postClaim(w http.ResponseWriter, r *http.Request, key string) {
+	var body struct {
+		TransitionID string `json:"transitionId"`
+		TakeOver     bool   `json:"takeOver"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeJiraError(w, http.StatusBadRequest, "Invalid request body")
+		return
+	}
+	res, err := s.st.Claim(key, s.identity(r).AccountID, body.TransitionID, body.TakeOver)
+	if err != nil {
+		if store.IsNotFound(err) {
+			writeJiraError(w, http.StatusNotFound, err.Error())
+			return
+		}
+		if store.IsConflict(err) {
+			writeJiraError(w, http.StatusConflict, err.Error())
+			return
+		}
+		if fe, ok := store.AsFieldError(err); ok {
+			writeJiraFieldErrors(w, fe.Map())
+			return
+		}
+		writeJiraWriteError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"key":       res.Key,
+		"assignee":  s.userJSON(res.Assignee),
+		"status":    s.statusJSON(res.Status),
+		"claimedAt": res.ClaimedAt,
+	})
 }
 
 func (s *Server) putAssignee(w http.ResponseWriter, r *http.Request, key string) {

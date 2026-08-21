@@ -63,6 +63,7 @@ func Inventory() []Route {
 		{Method: "POST", Path: "/rest/api/{v}/issue/{key}/comment", Level: Supported, Notes: "stores visibility {type:role|group,value} and sd.public.comment as jsdPublic; invalid type 400 errors.visibility", Cloud: true, DC: true},
 		{Method: "PUT", Path: "/rest/api/{v}/issue/{key}/assignee", Level: Supported, Cloud: true, DC: true},
 		{Method: "POST", Path: "/rest/api/{v}/issue/{key}/transitions", Level: Supported, Notes: "stores fields.resolution by catalog id; undeclared screen fields 400; done without a resolution defaults to 10000", Cloud: true, DC: true},
+		{Method: "POST", Path: "/rest/api/{v}/issue/{key}/claim", Level: Supported, Notes: "issuetap extension (no Atlassian route): atomic assignee + in-progress transition under one lock; claimed by another actor is 409 naming the holder; same actor is idempotent; takeOver overrides; no in-progress destination is 400; claimedAt is read from the changelog", Cloud: true, DC: true},
 		{Method: "POST", Path: "/rest/api/{v}/issue/{key}/attachments", Level: Supported, Notes: "requires X-Atlassian-Token: no-check", Cloud: true, DC: true},
 		{Method: "POST", Path: "/rest/api/{v}/issueLink", Level: Supported, Notes: "stores the pair on both issues; unknown type 404; missing issue 404; self-link 400; duplicate same type/pair/direction is idempotent 201", Cloud: true, DC: true},
 

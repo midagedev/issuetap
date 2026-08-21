@@ -2218,6 +2218,18 @@ func (s *Store) ApplyTransition(key, transitionID, authorID string, fields, upda
 	if iss == nil {
 		return errNotFound("issue", key)
 	}
+	if err := s.applyTransitionLocked(iss, transitionID, authorID, fields, update); err != nil {
+		return err
+	}
+	return s.markDirtyLocked()
+}
+
+// applyTransitionLocked is ApplyTransition after the issue lookup: screen
+// checks, resolution catalog lookup, the status change, its changelog row,
+// and update.comment writes. Every validation happens before the first
+// mutation, so an error leaves the issue untouched. Claim runs it under
+// one lock with the assignee change (gadak GDK-591).
+func (s *Store) applyTransitionLocked(iss *model.Issue, transitionID, authorID string, fields, update map[string]any) error {
 	ids := s.destinationIDsLocked(iss.StatusID)
 	idx, err := strconv.Atoi(transitionID)
 	if err != nil || idx < 1 || idx > len(ids) {
@@ -2275,7 +2287,7 @@ func (s *Store) ApplyTransition(key, transitionID, authorID string, fields, upda
 	for _, body := range comments {
 		s.addCommentLocked(iss, authorID, body, nil, nil)
 	}
-	return s.markDirtyLocked()
+	return nil
 }
 
 func rejectFieldsNotOnScreen(fields map[string]any, screen map[string]fixtures.TransitionScreenField) error {
@@ -2501,6 +2513,14 @@ func (s *Store) SetAssignee(key, accountID, authorID string) error {
 	if iss == nil {
 		return errNotFound("issue", key)
 	}
+	s.setAssigneeLocked(iss, accountID, authorID)
+	return s.markDirtyLocked()
+}
+
+// setAssigneeLocked is SetAssignee after the issue lookup: the assignee
+// change and its changelog row. Claim runs it under one lock with the
+// in-progress transition (gadak GDK-591).
+func (s *Store) setAssigneeLocked(iss *model.Issue, accountID, authorID string) {
 	from := iss.AssigneeID
 	iss.AssigneeID = accountID
 	iss.Updated = clock.Format(s.clk.Tick())
@@ -2514,7 +2534,121 @@ func (s *Store) SetAssignee(key, accountID, authorID string) error {
 			To: accountID, ToString: s.displayFor("assignee", accountID),
 		}},
 	})
-	return s.markDirtyLocked()
+}
+
+// ClaimResult is the outcome of a successful Claim.
+type ClaimResult struct {
+	Key       string
+	Assignee  model.User
+	Status    model.Status
+	ClaimedAt string
+}
+
+// Claim is POST /issue/{key}/claim (issuetap extension, gadak GDK-591 —
+// Cloud has no such route; there the client falls back to two calls).
+// Assignee + in-progress transition happen as one mutation under s.mu, so
+// of two agents claiming concurrently exactly one wins. Rules, in order:
+//
+//   - the issue is already in an in-progress status (statusCategory.key
+//     "indeterminate" — never a localized name, docs/LOCALES.md) and the
+//     assignee is another accountId → errConflict ("<KEY> is already
+//     claimed by <displayName>") unless takeOver;
+//   - the same actor already holds it → idempotent success: no
+//     re-transition, no duplicate changelog row;
+//   - otherwise → assignee=actor and, when the issue is not already in
+//     progress, the in-progress transition. transitionID selects it
+//     explicitly; empty picks the first destination whose category is
+//     indeterminate, or errors "no in-progress transition available".
+//
+// A claim never moves an issue that is already in progress: takeover is an
+// assignee change, and the auto-picked transition cannot exist anyway (a
+// status is not its own destination). The transition runs before the
+// assignee write so its validation errors leave the issue untouched.
+// ClaimedAt is read from the changelog (when the issue entered its current
+// status) — no new stored field; time-in-status stays changelog-derived.
+func (s *Store) Claim(key, actorID, transitionID string, takeOver bool) (ClaimResult, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	iss := s.issues[key]
+	if iss == nil {
+		return ClaimResult{}, errNotFound("issue", key)
+	}
+	inProgress := s.issueInProgressLocked(iss)
+	if inProgress && iss.AssigneeID != "" && iss.AssigneeID != actorID && !takeOver {
+		return ClaimResult{}, errConflict(fmt.Sprintf(
+			"%s is already claimed by %s", iss.Key, s.displayFor("assignee", iss.AssigneeID)))
+	}
+	if !(inProgress && iss.AssigneeID == actorID) { // not the idempotent case
+		if !inProgress {
+			id := transitionID
+			if id == "" {
+				id = s.firstInProgressTransitionLocked(iss)
+			}
+			if id == "" {
+				return ClaimResult{}, fmt.Errorf("no in-progress transition available")
+			}
+			if err := s.applyTransitionLocked(iss, id, actorID, nil, nil); err != nil {
+				return ClaimResult{}, err
+			}
+		}
+		if iss.AssigneeID != actorID {
+			s.setAssigneeLocked(iss, actorID, actorID)
+		}
+		if err := s.markDirtyLocked(); err != nil {
+			return ClaimResult{}, err
+		}
+	}
+	res := ClaimResult{Key: iss.Key, ClaimedAt: s.lastStatusChangeLocked(iss)}
+	if res.ClaimedAt == "" {
+		res.ClaimedAt = iss.Updated
+	}
+	if u, ok := s.users[iss.AssigneeID]; ok {
+		res.Assignee = *u
+	} else {
+		res.Assignee = model.User{
+			AccountID: iss.AssigneeID, DisplayName: s.displayFor("assignee", iss.AssigneeID),
+		}
+	}
+	if st := s.statuses[iss.StatusID]; st != nil {
+		res.Status = *st
+	} else {
+		res.Status = model.Status{ID: iss.StatusID, Name: iss.StatusID}
+	}
+	return res, nil
+}
+
+// issueInProgressLocked reports whether the issue's status category is
+// indeterminate (Jira's in-progress category; the key is locale-stable).
+func (s *Store) issueInProgressLocked(iss *model.Issue) bool {
+	st := s.statuses[iss.StatusID]
+	return st != nil && st.StatusCategory.Key == "indeterminate"
+}
+
+// firstInProgressTransitionLocked is the synthetic transition id of the
+// first destination whose statusCategory.key is indeterminate, in the same
+// destinationIDsLocked order GET /transitions lists — or "" when none is.
+func (s *Store) firstInProgressTransitionLocked(iss *model.Issue) string {
+	ids := s.destinationIDsLocked(iss.StatusID)
+	for i, id := range ids {
+		if st := s.statuses[id]; st != nil && st.StatusCategory.Key == "indeterminate" {
+			return strconv.Itoa(i + 1)
+		}
+	}
+	return ""
+}
+
+// lastStatusChangeLocked is when the issue entered its current status:
+// the newest changelog row carrying a status item with To == now. Empty
+// when no such row exists (an authored fixture without history).
+func (s *Store) lastStatusChangeLocked(iss *model.Issue) string {
+	for i := len(iss.Histories) - 1; i >= 0; i-- {
+		for _, it := range iss.Histories[i].Items {
+			if it.FieldID == "status" && it.To == iss.StatusID {
+				return iss.Histories[i].Created
+			}
+		}
+	}
+	return ""
 }
 
 // UpdateFields applies a fields map (summary, description, labels, …).
@@ -3294,8 +3428,9 @@ func (e conflictError) Error() string { return e.msg }
 
 func errConflict(msg string) error { return conflictError{msg} }
 
-// IsConflict reports a Confluence optimistic-concurrency miss
-// (PUT version.number != current+1).
+// IsConflict reports a write-vs-write conflict: a Confluence
+// optimistic-concurrency miss (PUT version.number != current+1), or a
+// Claim on an issue another actor already holds (gadak GDK-591).
 func IsConflict(err error) bool {
 	_, ok := err.(conflictError)
 	return ok

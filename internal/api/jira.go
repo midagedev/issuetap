@@ -100,7 +100,33 @@ func (s *Server) getMyself(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, out)
 }
 
+// maxActorSlugLen caps X-Issuetap-Actor (gadak GDK-588): the slug is a
+// short stable identity ("claude:354bff2b"), not a channel for data.
+const maxActorSlugLen = 128
+
+// checkActorHeader validates X-Issuetap-Actor before dispatch. Blank after
+// trim is ignored — identity falls through to the Basic/DefaultUser path;
+// longer than maxActorSlugLen is a 400. It never touches the header value.
+func checkActorHeader(w http.ResponseWriter, r *http.Request) bool {
+	slug := strings.TrimSpace(r.Header.Get("X-Issuetap-Actor"))
+	if len(slug) > maxActorSlugLen {
+		writeJiraError(w, http.StatusBadRequest,
+			"X-Issuetap-Actor must be at most "+strconv.Itoa(maxActorSlugLen)+" characters.")
+		return false
+	}
+	return true
+}
+
+// identity is the acting user for a request. Precedence (gadak GDK-588):
+// X-Issuetap-Actor — an agent slug used as the accountId verbatim,
+// auto-provisioned as an accountType "agent" user — then the Basic
+// username, then DefaultUser. The two channels stay separate: authorize()
+// still overwrites X-Issuetap-User with the Basic username and must not
+// touch the actor header.
 func (s *Server) identity(r *http.Request) *model.User {
+	if slug := strings.TrimSpace(r.Header.Get("X-Issuetap-Actor")); slug != "" {
+		return s.st.EnsureActor(slug, strings.TrimSpace(r.Header.Get("X-Issuetap-Actor-Name")))
+	}
 	user := r.Header.Get("X-Issuetap-User")
 	if user != "" {
 		if u := s.st.UserByEmail(user); u != nil {
@@ -786,7 +812,7 @@ func (s *Server) putAssignee(w http.ResponseWriter, r *http.Request, key string)
 	if v, ok := body["name"]; ok && v != nil && id == "" {
 		id, _ = v.(string)
 	}
-	if err := s.st.SetAssignee(key, id); err != nil {
+	if err := s.st.SetAssignee(key, id, s.identity(r).AccountID); err != nil {
 		if store.IsNotFound(err) {
 			writeJiraError(w, http.StatusNotFound, "Issue does not exist")
 			return
@@ -818,7 +844,7 @@ func (s *Server) postIssue(w http.ResponseWriter, r *http.Request) {
 		writeJiraError(w, http.StatusBadRequest, "Invalid request body")
 		return
 	}
-	iss, err := s.st.CreateIssue(body.Fields)
+	iss, err := s.st.CreateIssue(body.Fields, s.identity(r).AccountID)
 	if err != nil {
 		if fe, ok := store.AsFieldError(err); ok {
 			writeJiraFieldErrors(w, fe.Map())

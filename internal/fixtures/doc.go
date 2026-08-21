@@ -47,6 +47,9 @@ type User struct {
 	Email       string `json:"email,omitempty" yaml:"email,omitempty"`
 	Active      *bool  `json:"active,omitempty" yaml:"active,omitempty"`
 	TimeZone    string `json:"timeZone,omitempty" yaml:"timeZone,omitempty"`
+	// AccountType is the Cloud accountType ("atlassian" or "agent").
+	// Absent means atlassian — the pre-GDK-588 fixtures stay as they are.
+	AccountType string `json:"accountType,omitempty" yaml:"accountType,omitempty"`
 }
 
 type Project struct {

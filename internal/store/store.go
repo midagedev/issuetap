@@ -677,7 +677,7 @@ func (s *Store) putUser(u fixtures.User) *model.User {
 	m := &model.User{
 		AccountID: id, Name: u.Name, Key: first(u.Key, u.Name, id),
 		DisplayName: u.DisplayName, Email: u.Email, Active: active,
-		TimeZone: tz, AccountType: "atlassian",
+		TimeZone: tz, AccountType: first(u.AccountType, "atlassian"),
 		AvatarURLs: avatarURLs(id),
 	}
 	s.users[id] = m
@@ -1098,6 +1098,34 @@ func (s *Store) userOrDefault(ref string) *model.User {
 		AccountID: "5b10a2844c20165700ede21g", DisplayName: "Ada Lovelace",
 		Email: "you@example.com",
 	})
+	cp := *u
+	return &cp
+}
+
+// EnsureActor returns the user an X-Issuetap-Actor slug names, creating it
+// when unknown (gadak GDK-588): the slug is the accountId itself, the
+// display name falls back to the slug, and the account type is "agent" so
+// agent-authored records render as agent accounts. Lookup is the users-map
+// key only (accountId or DC username alias) — display names are never
+// matched, and creation only happens when the key is free, so one agent
+// cannot silently become another user and no alias is clobbered.
+func (s *Store) EnsureActor(slug, name string) *model.User {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if u, ok := s.users[slug]; ok {
+		cp := *u
+		return &cp
+	}
+	if name == "" {
+		name = slug
+	}
+	u := s.putUser(fixtures.User{
+		AccountID: slug, DisplayName: name, AccountType: "agent",
+	})
+	// identity() has no error channel: a durable-persist failure stays on
+	// PersistErr and the backoff retry, and the write that follows
+	// (comment, transition, …) re-flushes the same snapshot with this user.
+	_ = s.markDirtyLocked()
 	cp := *u
 	return &cp
 }
@@ -2439,8 +2467,9 @@ func (s *Store) AddPageComment(pageID, authorID string, body json.RawMessage) (m
 	return cm, s.markDirtyLocked()
 }
 
-// SetAssignee assigns or unassigns.
-func (s *Store) SetAssignee(key, accountID string) error {
+// SetAssignee assigns or unassigns. authorID is the acting user recorded
+// as the changelog author (gadak GDK-588); accountID is the new assignee.
+func (s *Store) SetAssignee(key, accountID, authorID string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	iss := s.issues[key]
@@ -2453,7 +2482,7 @@ func (s *Store) SetAssignee(key, accountID string) error {
 	s.seqHist++
 	iss.Histories = append(iss.Histories, model.History{
 		ID: "h" + strconv.Itoa(s.seqHist), Created: iss.Updated,
-		Author: *s.userOrDefault(""),
+		Author: *s.userOrDefault(authorID),
 		Items: []model.HistoryItem{{
 			Field: "assignee", FieldID: "assignee",
 			From: from, FromString: s.displayFor("assignee", from),
@@ -2847,8 +2876,10 @@ func jsonMarshal(v any) ([]byte, error) {
 	return json.Marshal(v)
 }
 
-// CreateIssue files a new issue. fields is the Jira fields object.
-func (s *Store) CreateIssue(fields map[string]any) (*model.Issue, error) {
+// CreateIssue files a new issue. fields is the Jira fields object;
+// reporterID is the acting user used when fields omits reporter (gadak
+// GDK-588 — an explicit fields.reporter always wins).
+func (s *Store) CreateIssue(fields map[string]any, reporterID string) (*model.Issue, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	project := pickKey(fields["project"])
@@ -2884,7 +2915,7 @@ func (s *Store) CreateIssue(fields map[string]any) (*model.Issue, error) {
 		ParentKey: parentKey,
 	}
 	if iss.ReporterID == "" {
-		iss.ReporterID = s.userOrDefault("").AccountID
+		iss.ReporterID = s.userOrDefault(reporterID).AccountID
 	}
 	iss.CreatorID = iss.ReporterID
 	s.setDesc(iss, fields["description"])
@@ -3266,6 +3297,7 @@ func (s *Store) snapshotLocked() fixtures.Doc {
 		d.Users = append(d.Users, fixtures.User{
 			AccountID: u.AccountID, Name: u.Name, Key: u.Key,
 			DisplayName: u.DisplayName, Email: u.Email, Active: &active, TimeZone: u.TimeZone,
+			AccountType: u.AccountType,
 		})
 	}
 	sort.Slice(d.Users, func(i, j int) bool { return d.Users[i].AccountID < d.Users[j].AccountID })

@@ -136,6 +136,11 @@ func (s *Server) handleRoot(w http.ResponseWriter, r *http.Request) {
 		if !s.authorize(w, r) {
 			return
 		}
+		// The actor header is a second identity channel on top of Basic
+		// auth; validate it before any handler dispatches (GDK-588).
+		if !checkActorHeader(w, r) {
+			return
+		}
 		if strings.HasPrefix(path, "/rest/dev-status/") {
 			s.handleDevStatus(w, r, path)
 			return

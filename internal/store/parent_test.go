@@ -14,7 +14,7 @@ func TestCreateIssueRejectsSameLevelParent(t *testing.T) {
 		"summary":   "task under task",
 		"issuetype": map[string]any{"id": "10003"},
 		"parent":    map[string]any{"key": "TAP-2"},
-	})
+	}, "")
 	assertParentFieldError(t, err, "parent", "parentId")
 }
 
@@ -24,7 +24,7 @@ func TestCreateIssueRejectsEpicUnderEpic(t *testing.T) {
 		"project":   map[string]any{"key": "TAP"},
 		"summary":   "epic a",
 		"issuetype": map[string]any{"id": "10000"},
-	})
+	}, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -33,7 +33,7 @@ func TestCreateIssueRejectsEpicUnderEpic(t *testing.T) {
 		"summary":   "epic under epic",
 		"issuetype": map[string]any{"id": "10000"},
 		"parent":    map[string]any{"key": epic.Key},
-	})
+	}, "")
 	assertParentFieldError(t, err, "parent", "parentId")
 }
 
@@ -43,7 +43,7 @@ func TestCreateIssueAcceptsEpicParentOfTask(t *testing.T) {
 		"project":   map[string]any{"key": "TAP"},
 		"summary":   "epic parent",
 		"issuetype": map[string]any{"id": "10000"},
-	})
+	}, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -52,7 +52,7 @@ func TestCreateIssueAcceptsEpicParentOfTask(t *testing.T) {
 		"summary":   "task under epic",
 		"issuetype": map[string]any{"id": "10003"},
 		"parent":    map[string]any{"key": epic.Key},
-	})
+	}, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -68,7 +68,7 @@ func TestCreateIssueAcceptsTaskParentOfSubtask(t *testing.T) {
 		"summary":   "sub-task under task",
 		"issuetype": map[string]any{"id": "10002"},
 		"parent":    map[string]any{"key": "TAP-2"},
-	})
+	}, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -95,7 +95,7 @@ func TestCreateIssueRejectsUnknownParent(t *testing.T) {
 		"summary":   "missing parent",
 		"issuetype": map[string]any{"id": "10003"},
 		"parent":    map[string]any{"key": "TAP-MISSING"},
-	})
+	}, "")
 	assertParentFieldError(t, err, "parent", "parentId")
 }
 
@@ -114,7 +114,7 @@ func TestParentHierarchyKeysOnTypeIDNotName(t *testing.T) {
 		"summary":   "same level",
 		"issuetype": map[string]any{"id": "10003"},
 		"parent":    map[string]any{"key": "TAP-2"},
-	})
+	}, "")
 	assertParentFieldError(t, err, "parent", "parentId")
 }
 

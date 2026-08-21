@@ -23,7 +23,7 @@ func TestWallClockStampsRealTime(t *testing.T) {
 	iss, err := s.CreateIssue(map[string]any{
 		"project": map[string]any{"key": "STD"},
 		"summary": "wall time probe",
-	})
+	}, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -43,7 +43,7 @@ func TestWallClockStampsRealTime(t *testing.T) {
 	iss2, err := det.CreateIssue(map[string]any{
 		"project": map[string]any{"key": "STD"},
 		"summary": "seed probe",
-	})
+	}, "")
 	if err != nil {
 		t.Fatal(err)
 	}

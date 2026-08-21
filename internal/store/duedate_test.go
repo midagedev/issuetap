@@ -63,7 +63,7 @@ func TestCreateIssueDuedateIsFirstClass(t *testing.T) {
 		"project": map[string]any{"key": "TAP"},
 		"summary": "has a due date",
 		"duedate": "2026-10-15",
-	})
+	}, "")
 	if err != nil {
 		t.Fatal(err)
 	}

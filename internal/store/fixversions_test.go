@@ -325,7 +325,7 @@ func TestCreateIssueFixVersionsComponentsTypedThenJQL(t *testing.T) {
 		"issuetype":   map[string]any{"id": "10003"},
 		"fixVersions": []any{map[string]any{"id": v.ID}},
 		"components":  []any{map[string]any{"name": c.Name}},
-	})
+	}, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -359,7 +359,7 @@ func TestCreateIssueFixVersionsUnknownID(t *testing.T) {
 		"summary":     "unknown fix version",
 		"issuetype":   map[string]any{"id": "10003"},
 		"fixVersions": []any{map[string]any{"id": "99999"}},
-	})
+	}, "")
 	if err == nil {
 		t.Fatal("expected error for unknown fixVersions id on create")
 	}

@@ -46,7 +46,7 @@ func TestCreateIssueDoesNotReuseFixtureIDs(t *testing.T) {
 	created, err := st.CreateIssue(map[string]any{
 		"project": map[string]any{"key": "TAP"},
 		"summary": "after tiny",
-	})
+	}, "")
 	if err != nil {
 		t.Fatal(err)
 	}

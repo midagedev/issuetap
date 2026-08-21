@@ -91,7 +91,7 @@ func TestDebouncedAutoWrite(t *testing.T) {
 	}
 	if _, err := st.CreateIssue(map[string]any{
 		"project": map[string]any{"key": "TAP"}, "summary": "debounced",
-	}); err != nil {
+	}, ""); err != nil {
 		t.Fatal(err)
 	}
 	b := waitForFile(t, path)
@@ -115,7 +115,7 @@ func TestCloseFlushesDirtyState(t *testing.T) {
 	if err := st.Apply(doc); err != nil {
 		t.Fatal(err)
 	}
-	if err := st.SetAssignee("TAP-1", "5b10a2844c20165700ede22g"); err != nil {
+	if err := st.SetAssignee("TAP-1", "5b10a2844c20165700ede22g", ""); err != nil {
 		t.Fatal(err)
 	}
 	if err := st.Close(); err != nil {
@@ -312,7 +312,7 @@ func TestFlushWritesLatestAndSurfacesError(t *testing.T) {
 	}
 	if _, err := st.CreateIssue(map[string]any{
 		"project": map[string]any{"key": "TAP"}, "summary": "flush-latest",
-	}); err != nil {
+	}, ""); err != nil {
 		t.Fatal(err)
 	}
 	if err := st.Flush(); err != nil {
@@ -392,7 +392,7 @@ func TestNegativeDebounceWritesBeforeReturn(t *testing.T) {
 	}
 	if _, err := st.CreateIssue(map[string]any{
 		"project": map[string]any{"key": "TAP"}, "summary": "sync-now",
-	}); err != nil {
+	}, ""); err != nil {
 		t.Fatal(err)
 	}
 	b, err := os.ReadFile(path)
@@ -422,7 +422,7 @@ func TestDurablePersistFailureReturnsFromMutation(t *testing.T) {
 	persistPathAsDir(t, path)
 	iss, err := st.CreateIssue(map[string]any{
 		"project": map[string]any{"key": "TAP"}, "summary": "durable-fail",
-	})
+	}, "")
 	if err == nil {
 		t.Fatal("expected durable persist failure from CreateIssue; mutation succeeded")
 	}
@@ -455,7 +455,7 @@ func TestDurablePersistFailureAllMutations(t *testing.T) {
 		{"CreateIssue", func(st *Store) error {
 			_, err := st.CreateIssue(map[string]any{
 				"project": map[string]any{"key": "TAP"}, "summary": "census",
-			})
+			}, "")
 			return err
 		}},
 		{"UpdateIssue", func(st *Store) error {
@@ -466,7 +466,7 @@ func TestDurablePersistFailureAllMutations(t *testing.T) {
 			return err
 		}},
 		{"SetAssignee", func(st *Store) error {
-			return st.SetAssignee("TAP-1", "5b10a2844c20165700ede21g")
+			return st.SetAssignee("TAP-1", "5b10a2844c20165700ede21g", "")
 		}},
 		{"Transition", func(st *Store) error {
 			return st.Transition("TAP-1", "1")
@@ -533,7 +533,7 @@ func TestDebouncedPersistFailureDoesNotFailMutation(t *testing.T) {
 	persistPathAsDir(t, path)
 	if _, err := st.CreateIssue(map[string]any{
 		"project": map[string]any{"key": "TAP"}, "summary": "debounce-fail",
-	}); err != nil {
+	}, ""); err != nil {
 		t.Fatalf("debounced mutation must succeed while persist retries: %v", err)
 	}
 }

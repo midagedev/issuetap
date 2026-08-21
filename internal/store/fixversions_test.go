@@ -348,3 +348,23 @@ func TestCreateIssueFixVersionsComponentsTypedThenJQL(t *testing.T) {
 		t.Fatalf("JQL component missed created issue %s", iss.Key)
 	}
 }
+
+// Create shares resolveNamedListLocked with PUT, but the create surface pins
+// its own rejection: an unknown id must refuse the create, not 201 into
+// Custom (the plausible-lie class GDK-581 closed).
+func TestCreateIssueFixVersionsUnknownID(t *testing.T) {
+	st := loadTiny(t)
+	_, err := st.CreateIssue(map[string]any{
+		"project":     map[string]any{"key": "TAP"},
+		"summary":     "unknown fix version",
+		"issuetype":   map[string]any{"id": "10003"},
+		"fixVersions": []any{map[string]any{"id": "99999"}},
+	})
+	if err == nil {
+		t.Fatal("expected error for unknown fixVersions id on create")
+	}
+	fe, ok := AsFieldError(err)
+	if !ok || fe.Field != "fixVersions" {
+		t.Fatalf("want FieldError{Field:fixVersions}, got %T %v", err, err)
+	}
+}

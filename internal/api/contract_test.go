@@ -15,6 +15,7 @@ package api_test
 // | GET changelog values/total/isLast | TestChangelogPage | TestChangelogTotalMatches |
 // | GET comments startAt/total | TestCommentsPage | TestCommentsMissingIssue |
 // | GET /project/search values/isLast | TestProjectSearch | TestProjectMissing |
+// | GET /project/{key} is a key; /{key}/… is 501 | TestProjectGetAndListUnchanged | TestProjectSubpathIsUnsupportedNotMissing |
 // | GET /priority order | TestPriorityOrder | TestPriorityLocaleOverlay |
 // | GET /field catalog | TestFieldCatalog | TestFieldNamesLocalize |
 // | GET /filter/my | TestFilters | TestFiltersEmpty |
@@ -362,6 +363,111 @@ func TestProjectMissing(t *testing.T) {
 		t.Fatalf("status %d", res.StatusCode)
 	}
 	res.Body.Close()
+}
+
+// TestProjectSubpathIsUnsupportedNotMissing is the class closer for
+// GET /project/{key}/…. A 404 with key 'TAP/versions' looks like the
+// project is missing; a 501 with unsupported_endpoint is the honest gap.
+func TestProjectSubpathIsUnsupportedNotMissing(t *testing.T) {
+	ts := testServer(t, locale.EN, dialect.Cloud)
+	defer ts.Close()
+	for _, path := range []string{
+		"/rest/api/3/project/TAP/versions",
+		"/rest/api/3/project/TAP/components",
+		"/rest/api/3/project/TAP/roles",
+	} {
+		t.Run(path, func(t *testing.T) {
+			assertProjectSubpathUnsupported(t, ts, path)
+		})
+	}
+}
+
+func TestProjectGetAndListUnchanged(t *testing.T) {
+	ts := testServer(t, locale.EN, dialect.Cloud)
+	defer ts.Close()
+
+	got := decode(t, authGet(t, ts, "/rest/api/3/project/TAP"))
+	if got["key"] != "TAP" {
+		t.Fatalf("GET /project/TAP = %v", got)
+	}
+
+	res := authGet(t, ts, "/rest/api/3/project/NOSUCH")
+	if res.StatusCode != http.StatusNotFound {
+		t.Fatalf("GET /project/NOSUCH status %d want 404", res.StatusCode)
+	}
+	v := decode(t, res)
+	if strings.Contains(fmtErrorMessages(v), "unsupported_endpoint") {
+		t.Fatalf("missing project claimed unsupported_endpoint: %v", v)
+	}
+
+	list := decodeArr(t, authGet(t, ts, "/rest/api/3/project"))
+	if len(list) < 1 {
+		t.Fatal("GET /project returned no projects")
+	}
+
+	search := decode(t, authGet(t, ts, "/rest/api/3/project/search"))
+	if search["isLast"] != true {
+		t.Fatal("GET /project/search expected isLast")
+	}
+	if int(search["total"].(float64)) < 1 {
+		t.Fatal("GET /project/search total < 1")
+	}
+}
+
+func TestProjectSubpathKoreanFixture(t *testing.T) {
+	doc, err := fixtures.Load(fixtures.Example("korean.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	st := store.New(store.Options{Seed: 1, Locale: locale.KO})
+	if err := st.Apply(doc); err != nil {
+		t.Fatal(err)
+	}
+	cfg := config.Default()
+	cfg.Dialect.Kind = dialect.Cloud
+	ts := httptest.NewServer(api.New(cfg, st, nil, nil, false).Handler())
+	defer ts.Close()
+
+	for _, path := range []string{
+		"/rest/api/3/project/TAP/versions",
+		"/rest/api/3/project/TAP/components",
+		"/rest/api/3/project/TAP/roles",
+	} {
+		t.Run(path, func(t *testing.T) {
+			assertProjectSubpathUnsupported(t, ts, path)
+		})
+	}
+	got := decode(t, authGet(t, ts, "/rest/api/3/project/TAP"))
+	if got["key"] != "TAP" {
+		t.Fatalf("korean fixture GET /project/TAP = %v", got)
+	}
+}
+
+func assertProjectSubpathUnsupported(t *testing.T, ts *httptest.Server, path string) {
+	t.Helper()
+	res := authGet(t, ts, path)
+	raw, err := io.ReadAll(res.Body)
+	res.Body.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.StatusCode == http.StatusNotFound {
+		t.Fatalf("%s returned 404 — looks like a missing project; body=%s", path, raw)
+	}
+	if res.StatusCode != http.StatusNotImplemented {
+		t.Fatalf("%s status %d want 501 body=%s", path, res.StatusCode, raw)
+	}
+	if !strings.Contains(string(raw), "unsupported_endpoint") {
+		t.Fatalf("%s body missing unsupported_endpoint: %s", path, raw)
+	}
+	if strings.Contains(string(raw), "No project could be found with key") {
+		t.Fatalf("%s treated remainder as a project key: %s", path, raw)
+	}
+}
+
+func fmtErrorMessages(v map[string]any) string {
+	b, _ := json.Marshal(v)
+	return string(b)
 }
 
 func TestPriorityOrder(t *testing.T) {

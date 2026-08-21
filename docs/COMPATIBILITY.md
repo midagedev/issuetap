@@ -100,7 +100,12 @@ This is enough to develop a DC client. It is not a verified DC product.
 
 `GET /dashboard`, `GET /board`, `GET /rest/agile/1.0/board`, webhooks,
 permissions, application-properties, group/member, JQL autocomplete,
-expression eval, Confluence `/wiki/api/v2/pages`, `/wiki/rest/api/user/current`.
+expression eval, Confluence `/wiki/api/v2/pages`, `/wiki/rest/api/user/current`,
+`GET /project/{key}/versions`, `GET /project/{key}/components`.
+
+A path after `/project/{key}` is an unimplemented sub-resource (HTTP 501),
+not a missing project. `GET /project/TAP/versions` must not 404 as
+`key 'TAP/versions'`.
 
 ## Lab API
 

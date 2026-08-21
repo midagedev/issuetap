@@ -95,6 +95,8 @@ func Inventory() []Route {
 		{Method: "POST", Path: "/rest/api/{v}/expression/eval", Level: Unsupported, Cloud: true, DC: true},
 		{Method: "GET", Path: "/wiki/rest/api/user/current", Level: Unsupported, Cloud: true, DC: false},
 		{Method: "GET", Path: "/wiki/api/v2/pages", Level: Unsupported, Notes: "v2 Confluence API is out of v0", Cloud: true, DC: false},
+		{Method: "GET", Path: "/rest/api/{v}/project/{key}/versions", Level: Unsupported, Notes: "project version catalog is out of v0", Cloud: true, DC: true},
+		{Method: "GET", Path: "/rest/api/{v}/project/{key}/components", Level: Unsupported, Notes: "project component catalog is out of v0", Cloud: true, DC: true},
 
 		// issuetap surfaces
 		{Method: "GET", Path: "/healthz", Level: IssuetapAPI, Notes: "liveness"},

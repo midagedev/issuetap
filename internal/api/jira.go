@@ -221,6 +221,11 @@ func (s *Server) getProjects(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) getProject(w http.ResponseWriter, r *http.Request, key string) {
 	key = strings.Trim(key, "/")
+	// Extra path segments are unimplemented sub-resources, not a missing key.
+	if strings.Contains(key, "/") {
+		writeUnsupported(w, r.Method, r.URL.Path)
+		return
+	}
 	p := s.st.Project(key)
 	if p == nil {
 		writeJiraError(w, http.StatusNotFound, "No project could be found with key '"+key+"'.")

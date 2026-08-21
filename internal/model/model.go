@@ -125,6 +125,37 @@ type DevActor struct {
 	DisplayName string `json:"displayName"`
 }
 
+// DevDeployment is one deployment record on an issue (gadak GDK-592).
+// The vocabulary is issuetap's own: Cloud's dev-status detail rows for
+// deployments were never captured, so the row is never served in detail —
+// only the summary block counts it. Environment is the target
+// (production, staging, …) and doubles as the link key when no url was
+// given; State is free-form, lowercase-normalized, and "successful" is
+// what the summary's successfulCount counts.
+type DevDeployment struct {
+	ID          string    `json:"id"`
+	URL         string    `json:"url"`
+	Environment string    `json:"environment"`
+	State       string    `json:"state"`
+	Updated     string    `json:"lastUpdate"`
+	Actor       *DevActor `json:"actor,omitempty"`
+}
+
+// DevBuild is one build record on an issue (gadak GDK-592). Same
+// vocabulary caveat as DevDeployment: summary-counted, never served in
+// detail. State is the closed set successful | failed | unknown — exactly
+// the three buckets the summary block counts. Number is the build number
+// as a string (the CLI's own identifier) and doubles as the link key when
+// no url was given.
+type DevBuild struct {
+	ID      string    `json:"id"`
+	URL     string    `json:"url"`
+	Number  string    `json:"number,omitempty"`
+	State   string    `json:"state"`
+	Updated string    `json:"lastUpdate"`
+	Actor   *DevActor `json:"actor,omitempty"`
+}
+
 // Visibility is a restricted comment audience. Type is role or group;
 // Value is the role or group name. Absent (nil) means the comment is
 // unrestricted — the HTTP key is omitted, never invented.
@@ -283,10 +314,15 @@ type Issue struct {
 	Attachments     []Attachment
 	// DevPRs are the development-panel pull-request links (gadak GDK-497).
 	// The origin keeps them; served in Jira's dev-status shape.
-	DevPRs    []DevPR
-	Links     []IssueLink
-	Histories []History
-	Custom    map[string]any
+	// DevDeployments and DevBuilds are the panel's other two kinds
+	// (gadak GDK-592) — kept on the origin the same way, counted by the
+	// dev-status summary; detail never serves them (uncaptured vocabulary).
+	DevPRs         []DevPR
+	DevDeployments []DevDeployment
+	DevBuilds      []DevBuild
+	Links          []IssueLink
+	Histories      []History
+	Custom         map[string]any
 }
 
 // Space is a Confluence space.

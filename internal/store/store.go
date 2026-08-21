@@ -853,6 +853,28 @@ func (s *Store) putIssue(in fixtures.Issue) error {
 		}
 		iss.DevPRs = append(iss.DevPRs, mpr)
 	}
+	for _, dep := range in.Deployments {
+		mdep := model.DevDeployment{
+			ID:  first(dep.ID, first(dep.URL, "environment:"+dep.Environment)),
+			URL: dep.URL, Environment: dep.Environment, State: dep.State,
+			Updated: first(dep.Updated, created),
+		}
+		if dep.ActorAccountID != "" || dep.ActorDisplayName != "" {
+			mdep.Actor = &model.DevActor{AccountID: dep.ActorAccountID, DisplayName: dep.ActorDisplayName}
+		}
+		iss.DevDeployments = append(iss.DevDeployments, mdep)
+	}
+	for _, b := range in.Builds {
+		mb := model.DevBuild{
+			ID:  first(b.ID, first(b.URL, "build:"+b.Number)),
+			URL: b.URL, Number: b.Number, State: b.State,
+			Updated: first(b.Updated, created),
+		}
+		if b.ActorAccountID != "" || b.ActorDisplayName != "" {
+			mb.Actor = &model.DevActor{AccountID: b.ActorAccountID, DisplayName: b.ActorDisplayName}
+		}
+		iss.DevBuilds = append(iss.DevBuilds, mb)
+	}
 	for _, a := range in.Attachments {
 		att, err := s.makeAttach(a, created)
 		if err != nil {
@@ -1410,18 +1432,24 @@ func (s *Store) Issue(keyOrID string) *model.Issue {
 // an empty string never overwrites a stored value). The actor is whatever
 // the caller stamped (the API layer stamps the request identity), so each
 // re-POST reattributes the link to its latest writer.
+// issueLocked resolves a key or numeric id; caller holds s.mu (write, via
+// the Link* dev-link methods).
+func (s *Store) issueLocked(keyOrID string) *model.Issue {
+	if iss, ok := s.issues[keyOrID]; ok {
+		return iss
+	}
+	for _, cand := range s.issues {
+		if cand.ID == keyOrID {
+			return cand
+		}
+	}
+	return nil
+}
+
 func (s *Store) LinkDevPR(keyOrID string, pr model.DevPR) (model.DevPR, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	iss := s.issues[keyOrID]
-	if iss == nil {
-		for _, cand := range s.issues {
-			if cand.ID == keyOrID {
-				iss = cand
-				break
-			}
-		}
-	}
+	iss := s.issueLocked(keyOrID)
 	if iss == nil {
 		return model.DevPR{}, errNotFound("issue", keyOrID)
 	}
@@ -1457,6 +1485,76 @@ func (s *Store) LinkDevPR(keyOrID string, pr model.DevPR) (model.DevPR, error) {
 	}
 	iss.DevPRs = append(iss.DevPRs, pr)
 	return pr, s.markDirtyLocked()
+}
+
+// LinkDevDeployment upserts one deployment record, keyed by ID (the url,
+// or environment:<env> when none was given) — the same merge rule as
+// LinkDevPR: an empty field never overwrites a stored value, the actor is
+// whatever the caller stamped, and each write reattributes the record to
+// its latest writer (gadak GDK-592).
+func (s *Store) LinkDevDeployment(keyOrID string, dep model.DevDeployment) (model.DevDeployment, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	iss := s.issueLocked(keyOrID)
+	if iss == nil {
+		return model.DevDeployment{}, errNotFound("issue", keyOrID)
+	}
+	dep.Updated = clock.Format(s.clk.Tick())
+	if dep.ID == "" {
+		dep.ID = first(dep.URL, "environment:"+dep.Environment)
+	}
+	iss.Updated = dep.Updated
+	for i := range iss.DevDeployments {
+		if iss.DevDeployments[i].ID == dep.ID {
+			if dep.URL == "" {
+				dep.URL = iss.DevDeployments[i].URL
+			}
+			if dep.Environment == "" {
+				dep.Environment = iss.DevDeployments[i].Environment
+			}
+			if dep.Actor == nil {
+				dep.Actor = iss.DevDeployments[i].Actor
+			}
+			iss.DevDeployments[i] = dep
+			return dep, s.markDirtyLocked()
+		}
+	}
+	iss.DevDeployments = append(iss.DevDeployments, dep)
+	return dep, s.markDirtyLocked()
+}
+
+// LinkDevBuild upserts one build record, keyed by ID (the url, or
+// build:<number> when none was given) — same merge rule as LinkDevPR
+// (gadak GDK-592).
+func (s *Store) LinkDevBuild(keyOrID string, b model.DevBuild) (model.DevBuild, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	iss := s.issueLocked(keyOrID)
+	if iss == nil {
+		return model.DevBuild{}, errNotFound("issue", keyOrID)
+	}
+	b.Updated = clock.Format(s.clk.Tick())
+	if b.ID == "" {
+		b.ID = first(b.URL, "build:"+b.Number)
+	}
+	iss.Updated = b.Updated
+	for i := range iss.DevBuilds {
+		if iss.DevBuilds[i].ID == b.ID {
+			if b.URL == "" {
+				b.URL = iss.DevBuilds[i].URL
+			}
+			if b.Number == "" {
+				b.Number = iss.DevBuilds[i].Number
+			}
+			if b.Actor == nil {
+				b.Actor = iss.DevBuilds[i].Actor
+			}
+			iss.DevBuilds[i] = b
+			return b, s.markDirtyLocked()
+		}
+	}
+	iss.DevBuilds = append(iss.DevBuilds, b)
+	return b, s.markDirtyLocked()
 }
 
 // IssueLinkTypes is GET /rest/api/3/issueLinkType. The catalog is a fixed
@@ -3635,6 +3733,27 @@ func (s *Store) issueToFix(iss *model.Issue) fixtures.Issue {
 			fpr.ActorDisplayName = pr.Actor.DisplayName
 		}
 		out.DevPRs = append(out.DevPRs, fpr)
+	}
+	for _, dep := range iss.DevDeployments {
+		fdep := fixtures.Deployment{
+			ID: dep.ID, URL: dep.URL, Environment: dep.Environment,
+			State: dep.State, Updated: dep.Updated,
+		}
+		if dep.Actor != nil {
+			fdep.ActorAccountID = dep.Actor.AccountID
+			fdep.ActorDisplayName = dep.Actor.DisplayName
+		}
+		out.Deployments = append(out.Deployments, fdep)
+	}
+	for _, b := range iss.DevBuilds {
+		fb := fixtures.Build{
+			ID: b.ID, URL: b.URL, Number: b.Number, State: b.State, Updated: b.Updated,
+		}
+		if b.Actor != nil {
+			fb.ActorAccountID = b.Actor.AccountID
+			fb.ActorDisplayName = b.Actor.DisplayName
+		}
+		out.Builds = append(out.Builds, fb)
 	}
 	for _, h := range iss.Histories {
 		fh := fixtures.History{ID: h.ID, At: h.Created, Author: h.Author.AccountID}

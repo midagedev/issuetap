@@ -150,7 +150,11 @@ type Issue struct {
 	History     []History      `json:"history,omitempty" yaml:"history,omitempty"`
 	Custom      map[string]any `json:"custom,omitempty" yaml:"custom,omitempty"`
 	// DevPRs are development-panel pull-request links (gadak GDK-497).
-	DevPRs      []DevPR        `json:"devPRs,omitempty" yaml:"devPRs,omitempty"`
+	DevPRs []DevPR `json:"devPRs,omitempty" yaml:"devPRs,omitempty"`
+	// Deployments and Builds are the panel's other two kinds (gadak
+	// GDK-592). Sibling arrays so pre-GDK-592 documents stay key-identical.
+	Deployments []Deployment `json:"deployments,omitempty" yaml:"deployments,omitempty"`
+	Builds      []Build      `json:"builds,omitempty" yaml:"builds,omitempty"`
 }
 
 // DevPR is one linked pull request in a fixture / persisted document.
@@ -166,6 +170,31 @@ type DevPR struct {
 	Updated          string `json:"updated,omitempty" yaml:"updated,omitempty"`
 	Author           string `json:"author,omitempty" yaml:"author,omitempty"`
 	Branch           string `json:"branch,omitempty" yaml:"branch,omitempty"`
+	ActorAccountID   string `json:"actorAccountId,omitempty" yaml:"actorAccountId,omitempty"`
+	ActorDisplayName string `json:"actorDisplayName,omitempty" yaml:"actorDisplayName,omitempty"`
+}
+
+// Deployment is one deployment record in a fixture / persisted document.
+// Flat keys like DevPR; URL is optional — a record without one is keyed by
+// its environment. All omitempty so empty values stay unwritten.
+type Deployment struct {
+	ID               string `json:"id,omitempty" yaml:"id,omitempty"`
+	URL              string `json:"url,omitempty" yaml:"url,omitempty"`
+	Environment      string `json:"environment,omitempty" yaml:"environment,omitempty"`
+	State            string `json:"state,omitempty" yaml:"state,omitempty"`
+	Updated          string `json:"updated,omitempty" yaml:"updated,omitempty"`
+	ActorAccountID   string `json:"actorAccountId,omitempty" yaml:"actorAccountId,omitempty"`
+	ActorDisplayName string `json:"actorDisplayName,omitempty" yaml:"actorDisplayName,omitempty"`
+}
+
+// Build is one build record in a fixture / persisted document. Number is
+// the build number as a string; a record without a URL is keyed by it.
+type Build struct {
+	ID               string `json:"id,omitempty" yaml:"id,omitempty"`
+	URL              string `json:"url,omitempty" yaml:"url,omitempty"`
+	Number           string `json:"number,omitempty" yaml:"number,omitempty"`
+	State            string `json:"state,omitempty" yaml:"state,omitempty"`
+	Updated          string `json:"updated,omitempty" yaml:"updated,omitempty"`
 	ActorAccountID   string `json:"actorAccountId,omitempty" yaml:"actorAccountId,omitempty"`
 	ActorDisplayName string `json:"actorDisplayName,omitempty" yaml:"actorDisplayName,omitempty"`
 }

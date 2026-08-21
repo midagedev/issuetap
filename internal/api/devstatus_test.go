@@ -312,6 +312,230 @@ func TestDevLinkAuthorBranchActorSurvivePersistReload(t *testing.T) {
 	}
 }
 
+// summaryOverall fetches one block's overall map from the dev-status
+// summary, failing the test on any envelope-shape deviation.
+func summaryOverall(t *testing.T, ts *httptest.Server, issueID, block string) map[string]any {
+	t.Helper()
+	sum := decode(t, authGet(t, ts, "/rest/dev-status/latest/issue/summary?issueId="+issueID))
+	return sum["summary"].(map[string]any)[block].(map[string]any)["overall"].(map[string]any)
+}
+
+// gadak GDK-592: the dev link POST grows a kind — deployment and build
+// records alongside pull requests — and the summary blocks count them.
+// The POST is issuetap's own, so the per-kind bodies stay minimal:
+// deployment carries environment + state, build carries state + optional
+// number. The summary vocabulary for those blocks is captured (see the
+// devstatus.go header); the detail row vocabulary is not, so detail serves
+// no rows for these kinds — the boundary the last section pins.
+func TestDevLinkKindDeploymentAndBuild(t *testing.T) {
+	ts := testServer(t, locale.EN, dialect.Cloud)
+	defer ts.Close()
+
+	issue := decode(t, authGet(t, ts, "/rest/api/3/issue/TAP-2"))
+	issueID, _ := issue["id"].(string)
+	if issueID == "" {
+		t.Fatal("TAP-2 has no id")
+	}
+
+	// A deployment without a url is keyed by its environment.
+	res := actorPost(t, ts, "claude:354bff2b", "", "/rest/dev-status/1.0/issue/link", map[string]any{
+		"issueId": issueID, "kind": "deployment",
+		"environment": "production", "state": "successful",
+	})
+	if res.StatusCode != http.StatusCreated {
+		t.Fatalf("deployment link status %d", res.StatusCode)
+	}
+	created := decode(t, res)
+	if created["environment"] != "production" || created["state"] != "successful" {
+		t.Fatalf("201 deployment = %v", created)
+	}
+	if a := created["actor"].(map[string]any); a["accountId"] != "claude:354bff2b" {
+		t.Fatalf("201 actor = %v", a)
+	}
+
+	ov := summaryOverall(t, ts, issueID, "deployment-environment")
+	if ov["count"].(float64) != 1 || ov["successfulCount"].(float64) != 1 || ov["dataType"] != "deployment-environment" {
+		t.Fatalf("deployment overall = %v", ov)
+	}
+	// topEnvironments / showProjects stay at the captured empty values —
+	// their non-empty shapes were never captured.
+	if ov["showProjects"] != false || len(ov["topEnvironments"].([]any)) != 0 {
+		t.Fatalf("uncaptured summary fields invented: %v", ov)
+	}
+
+	// The pull-request surface is untouched by a deployment link.
+	if pr := summaryOverall(t, ts, issueID, "pullrequest"); pr["count"].(float64) != 0 {
+		t.Fatalf("deployment leaked into pullrequest: %v", pr)
+	}
+
+	// Upsert by environment: the same environment does not duplicate, and
+	// the counts follow the new state.
+	res = actorPost(t, ts, "", "", "/rest/dev-status/1.0/issue/link", map[string]any{
+		"issueId": issueID, "kind": "deployment",
+		"environment": "production", "state": "failed",
+	})
+	if res.StatusCode != http.StatusCreated {
+		t.Fatalf("deployment re-POST status %d", res.StatusCode)
+	}
+	res.Body.Close()
+	ov = summaryOverall(t, ts, issueID, "deployment-environment")
+	if ov["count"].(float64) != 1 || ov["successfulCount"].(float64) != 0 {
+		t.Fatalf("deployment upsert duplicated: %v", ov)
+	}
+
+	// Deployment requires both environment and state.
+	for _, body := range []map[string]any{
+		{"issueId": issueID, "kind": "deployment", "state": "successful"},
+		{"issueId": issueID, "kind": "deployment", "environment": "staging"},
+	} {
+		res := authPost(t, ts, "/rest/dev-status/1.0/issue/link", body)
+		if res.StatusCode != http.StatusBadRequest {
+			t.Fatalf("partial deployment accepted: %d %v", res.StatusCode, body)
+		}
+		res.Body.Close()
+	}
+
+	// A build: url-keyed, closed state vocabulary (the three buckets the
+	// summary block counts).
+	res = authPost(t, ts, "/rest/dev-status/1.0/issue/link", map[string]any{
+		"issueId": issueID, "kind": "build",
+		"url": "https://ci.example/gadak/build/42", "number": "42", "state": "failed",
+	})
+	if res.StatusCode != http.StatusCreated {
+		t.Fatalf("build link status %d", res.StatusCode)
+	}
+	created = decode(t, res)
+	if created["number"] != "42" || created["state"] != "failed" {
+		t.Fatalf("201 build = %v", created)
+	}
+	ov = summaryOverall(t, ts, issueID, "build")
+	if ov["count"].(float64) != 1 || ov["failedBuildCount"].(float64) != 1 ||
+		ov["successfulBuildCount"].(float64) != 0 || ov["unknownBuildCount"].(float64) != 0 {
+		t.Fatalf("build overall = %v", ov)
+	}
+
+	// Upsert by url; a number-only build keys on the number.
+	res = authPost(t, ts, "/rest/dev-status/1.0/issue/link", map[string]any{
+		"issueId": issueID, "kind": "build", "number": "7", "state": "successful",
+	})
+	if res.StatusCode != http.StatusCreated {
+		t.Fatalf("number-only build status %d", res.StatusCode)
+	}
+	res.Body.Close()
+	ov = summaryOverall(t, ts, issueID, "build")
+	if ov["count"].(float64) != 2 || ov["successfulBuildCount"].(float64) != 1 {
+		t.Fatalf("build overall after second build = %v", ov)
+	}
+
+	// Build rejects a state outside the three buckets, a missing state,
+	// and a row with neither url nor number.
+	for _, body := range []map[string]any{
+		{"issueId": issueID, "kind": "build", "url": "https://ci/x/1", "state": "pending"},
+		{"issueId": issueID, "kind": "build", "url": "https://ci/x/1"},
+		{"issueId": issueID, "kind": "build", "state": "successful"},
+	} {
+		res := authPost(t, ts, "/rest/dev-status/1.0/issue/link", body)
+		if res.StatusCode != http.StatusBadRequest {
+			t.Fatalf("bad build accepted: %d %v", res.StatusCode, body)
+		}
+		res.Body.Close()
+	}
+
+	// An unknown kind is rejected — it must not land as a pull request.
+	res = authPost(t, ts, "/rest/dev-status/1.0/issue/link", map[string]any{
+		"issueId": issueID, "url": "https://github.com/example/app/pull/9",
+		"kind": "release", "status": "open",
+	})
+	if res.StatusCode != http.StatusBadRequest {
+		t.Fatalf("unknown kind accepted: %d", res.StatusCode)
+	}
+	res.Body.Close()
+
+	// An explicit kind=pullrequest behaves exactly like the kindless POST.
+	res = authPost(t, ts, "/rest/dev-status/1.0/issue/link", map[string]any{
+		"issueId": issueID, "kind": "pullrequest",
+		"url": "https://github.com/example/app/pull/77", "name": "explicit kind", "status": "merged",
+	})
+	if res.StatusCode != http.StatusCreated {
+		t.Fatalf("explicit pullrequest kind status %d", res.StatusCode)
+	}
+	res.Body.Close()
+	got := detailPR(t, ts, issueID)
+	if got["url"] != "https://github.com/example/app/pull/77" || got["status"] != "MERGED" || got["name"] != "explicit kind" {
+		t.Fatalf("explicit-kind pr = %v", got)
+	}
+	if pr := summaryOverall(t, ts, issueID, "pullrequest"); pr["count"].(float64) != 1 || pr["state"] != "MERGED" {
+		t.Fatalf("explicit-kind summary = %v", pr)
+	}
+
+	// The vocabulary boundary: detail serves no deployment/build rows
+	// because Cloud's row shape for them was never captured.
+	for _, dt := range []string{"deployment-environment", "build"} {
+		det := decode(t, authGet(t, ts,
+			"/rest/dev-status/1.0/issue/detail?issueId="+issueID+"&applicationType=GitHub&dataType="+dt))
+		if rows := det["detail"].([]any); len(rows) != 0 {
+			t.Fatalf("dataType=%s served unevidenced rows: %v", dt, rows)
+		}
+	}
+}
+
+// TestDevLinkKindSurvivePersistReload: deployment and build links survive
+// a persist write + reload — the fixture rows must carry environment /
+// number / kind or the records lose their identity on restart (the same
+// trap GDK-588 hit with User.AccountType).
+func TestDevLinkKindSurvivePersistReload(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state.yaml")
+	// Same closure shape as TestDevLinkAuthorBranchActorSurvivePersistReload:
+	// seed=true applies the fixture (first run); the reload run seeds nothing.
+	openPersisted := func(seed bool) *httptest.Server {
+		st, err := store.Open(store.Options{
+			Seed: 1, Locale: locale.EN, PersistPath: path, PersistDebounce: -1,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { st.Close() })
+		if seed {
+			doc, err := fixtures.Load(fixtures.Example("tiny.yaml"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := st.Apply(doc); err != nil {
+				t.Fatal(err)
+			}
+		}
+		cfg := config.Default()
+		cfg.Dialect.Kind = dialect.Cloud
+		ts := httptest.NewServer(api.New(cfg, st, nil, nil, false).Handler())
+		t.Cleanup(ts.Close)
+		return ts
+	}
+
+	ts1 := openPersisted(true)
+	issue := decode(t, authGet(t, ts1, "/rest/api/3/issue/TAP-2"))
+	issueID, _ := issue["id"].(string)
+	for _, body := range []map[string]any{
+		{"issueId": issueID, "kind": "deployment", "environment": "staging", "state": "successful"},
+		{"issueId": issueID, "kind": "build", "number": "7", "state": "successful"},
+	} {
+		res := authPost(t, ts1, "/rest/dev-status/1.0/issue/link", body)
+		if res.StatusCode != http.StatusCreated {
+			t.Fatalf("link status %d for %v", res.StatusCode, body)
+		}
+		res.Body.Close()
+	}
+
+	ts2 := openPersisted(false) // re-opens the persisted file
+	ov := summaryOverall(t, ts2, issueID, "deployment-environment")
+	if ov["count"].(float64) != 1 || ov["successfulCount"].(float64) != 1 {
+		t.Fatalf("post-reload deployment overall = %v (lost on the persist round trip)", ov)
+	}
+	ov = summaryOverall(t, ts2, issueID, "build")
+	if ov["count"].(float64) != 1 || ov["successfulBuildCount"].(float64) != 1 {
+		t.Fatalf("post-reload build overall = %v (lost on the persist round trip)", ov)
+	}
+}
+
 func TestDevStatusUnknownSubpathIs501(t *testing.T) {
 	ts := testServer(t, locale.EN, dialect.Cloud)
 	defer ts.Close()

@@ -30,6 +30,8 @@ package api_test
 // | Confluence child/comment | TestPageComments | TestPageCommentsEmpty |
 // | unsupported_endpoint 501 | TestUnsupported | TestUnsupportedNot404 |
 // | writes: comment / transition / assignee | TestWrites | TestWriteMissingIssue |
+// | GET /issueLinkType catalog 4 types | TestIssueLinkTypeCatalog | TestPostIssueLinkUnknownType404 |
+// | POST /issueLink both sides + persist | TestPostIssueLinkStoresBothSides / TestPostIssueLinkSurvivesPersistReload | TestPostIssueLinkMissingIssue404 / TestPostIssueLinkSelf400 / TestPostIssueLinkIdempotentDoesNotDuplicate |
 // | writes: fixVersions/components typed (not Custom) | TestPutFixVersionsAddByIDThenJQL / TestPutComponentsAddByNameThenJQL / TestPutFixVersionsFieldsReplaceThenJQL / TestPutComponentsFieldsReplaceThenJQL | TestPutFixVersionsUnknownIDIs400 / TestPutFixVersionsFieldsUnknownIDIs400 / TestPutUnknownSystemKeyStillCustom |
 // | GET transitions expand=transitions.fields | TestTransitionsExpandFieldsAlwaysPresent | TestTransitionsWithoutExpandOmitFields |
 // | POST transition fields.resolution | TestTransitionStoresRequestedResolution | TestTransitionRequiredResolution / TestTransitionRejectsFieldsWithoutScreen / TestTransitionRejectsUnknownResolution |

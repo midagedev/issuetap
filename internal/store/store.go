@@ -1373,6 +1373,106 @@ func (s *Store) LinkDevPR(keyOrID string, pr model.DevPR) (model.DevPR, error) {
 	return pr, s.markDirtyLocked()
 }
 
+// IssueLinkTypes is GET /rest/api/3/issueLinkType. The catalog is a fixed
+// Cloud-default table owned by model.DefaultIssueLinkTypes.
+func (s *Store) IssueLinkTypes() []model.IssueLinkType {
+	return model.DefaultIssueLinkTypes()
+}
+
+// ErrSelfLink is POST /issueLink when outward and inward resolve to one issue.
+var ErrSelfLink = errors.New("Cannot link an issue to itself.")
+
+// AddIssueLink is POST /rest/api/3/issueLink. typeID or typeName selects a
+// catalog row (id wins). Issue refs are keys or ids, same lookup as parent.
+//
+// Duplicate handling: the same catalog type + same outward key + same
+// inward key is a successful no-op. HTTP still returns 201, but a second
+// issuelinks element is not appended — a gadak link retry then cannot grow
+// the mirror on re-read. A one-sided fixture row is healed by writing the
+// missing side only.
+func (s *Store) AddIssueLink(typeID, typeName, outwardRef, inwardRef string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	lt, err := lookupIssueLinkType(typeID, typeName)
+	if err != nil {
+		return err
+	}
+	outwardRef = strings.TrimSpace(outwardRef)
+	inwardRef = strings.TrimSpace(inwardRef)
+	if outwardRef == "" || inwardRef == "" {
+		return fmt.Errorf("outwardIssue and inwardIssue are required")
+	}
+	outward := s.issueByParentRefLocked(outwardRef)
+	if outward == nil {
+		return errNotFound("issue", outwardRef)
+	}
+	inward := s.issueByParentRefLocked(inwardRef)
+	if inward == nil {
+		return errNotFound("issue", inwardRef)
+	}
+	if outward.Key == inward.Key {
+		return ErrSelfLink
+	}
+
+	added := false
+	if !issueHasDirectedLink(outward, lt.Name, true, inward.Key) {
+		outward.Links = append(outward.Links, model.IssueLink{TypeName: lt.Name, OutwardKey: inward.Key})
+		added = true
+	}
+	if !issueHasDirectedLink(inward, lt.Name, false, outward.Key) {
+		inward.Links = append(inward.Links, model.IssueLink{TypeName: lt.Name, InwardKey: outward.Key})
+		added = true
+	}
+	if !added {
+		return nil
+	}
+	now := clock.Format(s.clk.Tick())
+	outward.Updated = now
+	inward.Updated = now
+	return s.markDirtyLocked()
+}
+
+func lookupIssueLinkType(id, name string) (*model.IssueLinkType, error) {
+	id = strings.TrimSpace(id)
+	name = strings.TrimSpace(name)
+	catalog := model.DefaultIssueLinkTypes()
+	if id != "" {
+		for i := range catalog {
+			if catalog[i].ID == id {
+				cp := catalog[i]
+				return &cp, nil
+			}
+		}
+		return nil, errUnknownLinkType(id, false)
+	}
+	if name == "" {
+		return nil, fmt.Errorf("type is required")
+	}
+	for i := range catalog {
+		if strings.EqualFold(catalog[i].Name, name) {
+			cp := catalog[i]
+			return &cp, nil
+		}
+	}
+	return nil, errUnknownLinkType(name, true)
+}
+
+func issueHasDirectedLink(iss *model.Issue, typeName string, outward bool, otherKey string) bool {
+	for _, l := range iss.Links {
+		if !strings.EqualFold(l.TypeName, typeName) {
+			continue
+		}
+		if outward && l.OutwardKey == otherKey {
+			return true
+		}
+		if !outward && l.InwardKey == otherKey {
+			return true
+		}
+	}
+	return false
+}
+
 // Projects lists projects ordered by key.
 func (s *Store) Projects() []*model.Project {
 	s.mu.RLock()
@@ -3008,11 +3108,41 @@ func stringSlice(v any) []string {
 	return nil
 }
 
-type notFoundError struct{ kind, id string }
+type notFoundError struct{ kind, id, display string }
 
-func (e notFoundError) Error() string { return e.kind + " " + e.id + " not found" }
+func (e notFoundError) Error() string {
+	if e.display != "" {
+		return e.display
+	}
+	return e.kind + " " + e.id + " not found"
+}
 
-func errNotFound(kind, id string) error { return notFoundError{kind, id} }
+func errNotFound(kind, id string) error { return notFoundError{kind: kind, id: id} }
+
+func errUnknownLinkType(ref string, byName bool) error {
+	if byName {
+		return notFoundError{
+			kind:    "issue link type",
+			id:      ref,
+			display: "No issue link type with name '" + ref + "' found.",
+		}
+	}
+	return notFoundError{
+		kind:    "issue link type",
+		id:      ref,
+		display: "No issue link type with id '" + ref + "' found.",
+	}
+}
+
+// NotFoundKind is the resource kind inside an IsNotFound error ("issue",
+// "issue link type", …). Empty when err is not a not-found.
+func NotFoundKind(err error) string {
+	e, ok := err.(notFoundError)
+	if !ok {
+		return ""
+	}
+	return e.kind
+}
 
 // FieldError is a per-field write rejection (Jira's errors map).
 type FieldError struct {

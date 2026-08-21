@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
 	"io"
 	"log"
 	"mime"
@@ -42,6 +43,10 @@ func (s *Server) handleJira(w http.ResponseWriter, r *http.Request, path string)
 		s.getIssueTypes(w, r)
 	case r.Method == http.MethodGet && suffix == "/resolution":
 		s.getResolutions(w, r)
+	case r.Method == http.MethodGet && suffix == "/issueLinkType":
+		s.getIssueLinkTypes(w, r)
+	case r.Method == http.MethodPost && suffix == "/issueLink":
+		s.postIssueLink(w, r)
 	case r.Method == http.MethodGet && suffix == "/field":
 		s.getFields(w, r)
 	case r.Method == http.MethodGet && suffix == "/project/search":
@@ -175,6 +180,58 @@ func (s *Server) getResolutions(w http.ResponseWriter, r *http.Request) {
 		out = append(out, map[string]any{"id": rsl.ID, "name": rsl.Name})
 	}
 	writeJSON(w, http.StatusOK, out)
+}
+
+func (s *Server) getIssueLinkTypes(w http.ResponseWriter, r *http.Request) {
+	list := s.st.IssueLinkTypes()
+	out := make([]any, 0, len(list))
+	for _, t := range list {
+		out = append(out, map[string]any{
+			"id": t.ID, "name": t.Name, "inward": t.Inward, "outward": t.Outward,
+		})
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"issueLinkTypes": out})
+}
+
+func (s *Server) postIssueLink(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Type struct {
+			ID   string `json:"id"`
+			Name string `json:"name"`
+		} `json:"type"`
+		OutwardIssue struct {
+			Key string `json:"key"`
+			ID  string `json:"id"`
+		} `json:"outwardIssue"`
+		InwardIssue struct {
+			Key string `json:"key"`
+			ID  string `json:"id"`
+		} `json:"inwardIssue"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeJiraError(w, http.StatusBadRequest, "Invalid request body")
+		return
+	}
+	outward := firstNonEmpty(strings.TrimSpace(body.OutwardIssue.Key), strings.TrimSpace(body.OutwardIssue.ID))
+	inward := firstNonEmpty(strings.TrimSpace(body.InwardIssue.Key), strings.TrimSpace(body.InwardIssue.ID))
+	err := s.st.AddIssueLink(body.Type.ID, body.Type.Name, outward, inward)
+	if err != nil {
+		if store.IsNotFound(err) {
+			if store.NotFoundKind(err) == "issue" {
+				writeJiraError(w, http.StatusNotFound, "Issue does not exist or you do not have permission to see it.")
+				return
+			}
+			writeJiraError(w, http.StatusNotFound, err.Error())
+			return
+		}
+		if errors.Is(err, store.ErrSelfLink) {
+			writeJiraError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJiraWriteError(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusCreated)
 }
 
 func (s *Server) getFields(w http.ResponseWriter, r *http.Request) {

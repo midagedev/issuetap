@@ -140,6 +140,28 @@ type IssueLink struct {
 	OutwardKey string `json:"-"`
 }
 
+// IssueLinkType is one row of GET /rest/api/3/issueLinkType.
+// Names and inward/outward descriptions are the English Cloud defaults;
+// clients must key writes on id (or the catalog name), never a localized
+// display string.
+type IssueLinkType struct {
+	ID      string `json:"id"`
+	Name    string `json:"name"`
+	Inward  string `json:"inward"`
+	Outward string `json:"outward"`
+}
+
+// DefaultIssueLinkTypes is the Cloud default catalog. Store, HTTP, and
+// validation share this table — there is not a second copy in the handler.
+func DefaultIssueLinkTypes() []IssueLinkType {
+	return []IssueLinkType{
+		{ID: "10000", Name: "Blocks", Inward: "is blocked by", Outward: "blocks"},
+		{ID: "10001", Name: "Cloners", Inward: "is cloned by", Outward: "clones"},
+		{ID: "10002", Name: "Duplicate", Inward: "is duplicated by", Outward: "duplicates"},
+		{ID: "10003", Name: "Relates", Inward: "relates to", Outward: "relates to"},
+	}
+}
+
 // HistoryItem is one field change. Field is the localized display name;
 // FieldID is the stable identifier.
 type HistoryItem struct {
@@ -234,10 +256,10 @@ type Issue struct {
 	Attachments     []Attachment
 	// DevPRs are the development-panel pull-request links (gadak GDK-497).
 	// The origin keeps them; served in Jira's dev-status shape.
-	DevPRs          []DevPR
-	Links           []IssueLink
-	Histories       []History
-	Custom          map[string]any
+	DevPRs    []DevPR
+	Links     []IssueLink
+	Histories []History
+	Custom    map[string]any
 }
 
 // Space is a Confluence space.

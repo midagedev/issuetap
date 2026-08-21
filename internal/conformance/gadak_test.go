@@ -461,3 +461,92 @@ func TestIssuetapCreateFieldsRequiredSet(t *testing.T) {
 		t.Fatalf("gadak CreateFields against issuetap: %v", err)
 	}
 }
+
+// TestGadakLinkRoundTrip is the seam for GET /issueLinkType + POST /issueLink:
+// gadak link resolves --type blocks against the catalog, POSTs type.id, then
+// both issues must show the Cloud direction (outward sees outwardIssue,
+// inward sees inwardIssue). Gadak's own tests hit an httptest fake.
+func TestGadakLinkRoundTrip(t *testing.T) {
+	src := gadakSrc(t)
+	if _, err := os.Stat(filepath.Join(src, "cmd", "gadak", "link.go")); err != nil {
+		t.Skipf("gadak at %s predates gadak link", src)
+	}
+
+	bin := buildGadak(t)
+	root := repoRoot(t)
+	base, _ := startIssuetap(t, filepath.Join(root, "examples/fixtures/tiny.yaml"), locale.EN, nil)
+	home := writeGadakHome(t, base)
+
+	sync := exec.Command(bin, "sync", "--full")
+	sync.Env = append(os.Environ(), "GADAK_HOME="+home, "GADAK_PROFILE=")
+	out, err := sync.CombinedOutput()
+	t.Logf("gadak sync:\n%s", out)
+	if err != nil {
+		t.Fatalf("gadak sync: %v", err)
+	}
+
+	cmd := exec.Command(bin, "link", "TAP-1", "TAP-3", "--type", "blocks")
+	cmd.Env = append(os.Environ(), "GADAK_HOME="+home, "GADAK_PROFILE=")
+	out, err = cmd.CombinedOutput()
+	t.Logf("gadak link:\n%s", out)
+	if err != nil {
+		t.Fatalf("gadak link: %v\n%s", err, out)
+	}
+
+	a := issueLinksJSON(t, base, "TAP-1")
+	b := issueLinksJSON(t, base, "TAP-3")
+	if !hasJSONDirectedLink(a, "Blocks", "outwardIssue", "TAP-3") {
+		t.Fatalf("TAP-1 missing outwardIssue TAP-3: %v", a)
+	}
+	if hasJSONDirectedLink(a, "Blocks", "inwardIssue", "TAP-3") {
+		t.Fatalf("TAP-1 should not list TAP-3 as inwardIssue: %v", a)
+	}
+	if !hasJSONDirectedLink(b, "Blocks", "inwardIssue", "TAP-1") {
+		t.Fatalf("TAP-3 missing inwardIssue TAP-1: %v", b)
+	}
+	if hasJSONDirectedLink(b, "Blocks", "outwardIssue", "TAP-1") {
+		t.Fatalf("TAP-3 should not list TAP-1 as outwardIssue: %v", b)
+	}
+}
+
+func issueLinksJSON(t *testing.T, base, key string) []any {
+	t.Helper()
+	req, err := http.NewRequest(http.MethodGet, base+"/rest/api/3/issue/"+key+"?fields=issuelinks", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.SetBasicAuth("you@example.com", "issuetap")
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+	var v map[string]any
+	if err := json.NewDecoder(res.Body).Decode(&v); err != nil {
+		t.Fatal(err)
+	}
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("GET %s status %d body %v", key, res.StatusCode, v)
+	}
+	fields, _ := v["fields"].(map[string]any)
+	raw, _ := fields["issuelinks"].([]any)
+	return raw
+}
+
+func hasJSONDirectedLink(links []any, typeName, side, otherKey string) bool {
+	for _, item := range links {
+		l, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		typ, _ := l["type"].(map[string]any)
+		if typ == nil || typ["name"] != typeName {
+			continue
+		}
+		other, _ := l[side].(map[string]any)
+		if other != nil && other["key"] == otherKey {
+			return true
+		}
+	}
+	return false
+}

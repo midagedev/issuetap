@@ -35,6 +35,7 @@ func Inventory() []Route {
 		{Method: "GET", Path: "/rest/api/{v}/priority", Level: Supported, Notes: "most-urgent first; names localize under --locale", Cloud: true, DC: true},
 		{Method: "GET", Path: "/rest/api/{v}/issuetype", Level: Supported, Notes: "hierarchyLevel present", Cloud: true, DC: true},
 		{Method: "GET", Path: "/rest/api/{v}/resolution", Level: Supported, Cloud: true, DC: true},
+		{Method: "GET", Path: "/rest/api/{v}/issueLinkType", Level: Supported, Notes: "Cloud default 4: Blocks, Cloners, Duplicate, Relates (ids 10000–10003)", Cloud: true, DC: true},
 		{Method: "GET", Path: "/rest/api/{v}/field", Level: Supported, Notes: "catalog names localize", Cloud: true, DC: true},
 		{Method: "GET", Path: "/rest/api/{v}/project/search", Level: Supported, Notes: "values/isLast/total/startAt", Cloud: true, DC: false},
 		{Method: "GET", Path: "/rest/api/{v}/project", Level: Supported, Notes: "DC project list (array)", Cloud: true, DC: true},
@@ -62,6 +63,7 @@ func Inventory() []Route {
 		{Method: "PUT", Path: "/rest/api/{v}/issue/{key}/assignee", Level: Supported, Cloud: true, DC: true},
 		{Method: "POST", Path: "/rest/api/{v}/issue/{key}/transitions", Level: Supported, Notes: "stores fields.resolution by catalog id; undeclared screen fields 400; done without a resolution defaults to 10000", Cloud: true, DC: true},
 		{Method: "POST", Path: "/rest/api/{v}/issue/{key}/attachments", Level: Supported, Notes: "requires X-Atlassian-Token: no-check", Cloud: true, DC: true},
+		{Method: "POST", Path: "/rest/api/{v}/issueLink", Level: Supported, Notes: "stores the pair on both issues; unknown type 404; missing issue 404; self-link 400; duplicate same type/pair/direction is idempotent 201", Cloud: true, DC: true},
 
 		// Confluence Cloud (gadak confluence.Client)
 		{Method: "GET", Path: "/wiki/rest/api/space", Level: Supported, Cloud: true, DC: false},

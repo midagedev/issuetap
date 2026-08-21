@@ -88,15 +88,28 @@ type Project struct {
 	Simplified bool   `json:"simplified,omitempty"`
 }
 
+// Visibility is a restricted comment audience. Type is role or group;
+// Value is the role or group name. Absent (nil) means the comment is
+// unrestricted — the HTTP key is omitted, never invented.
+type Visibility struct {
+	Type  string `json:"type"`
+	Value string `json:"value"`
+}
+
 // Comment is an issue comment. Body is ADF (Cloud) or a wiki-markup string (DC)
 // depending on the dialect serializer — the store keeps ADF plus a plain text.
+// Visibility and JsdPublic are pointers so HTTP/persist can omit the keys
+// when unset (Cloud: unrestricted comments have neither key; non-JSM
+// comments have no jsdPublic).
 type Comment struct {
-	ID       string          `json:"id"`
-	Author   User            `json:"author"`
-	Body     json.RawMessage `json:"body"`
-	BodyText string          `json:"-"`
-	Created  string          `json:"created"`
-	Updated  string          `json:"updated"`
+	ID         string          `json:"id"`
+	Author     User            `json:"author"`
+	Body       json.RawMessage `json:"body"`
+	BodyText   string          `json:"-"`
+	Created    string          `json:"created"`
+	Updated    string          `json:"updated"`
+	Visibility *Visibility     `json:"visibility,omitempty"`
+	JsdPublic  *bool           `json:"jsdPublic,omitempty"`
 }
 
 // Attachment metadata. Bytes live on the store keyed by ID.

@@ -14,6 +14,8 @@ package api_test
 // | GET issue + expand=changelog | TestIssueChangelog | TestIssueMissing |
 // | GET changelog values/total/isLast | TestChangelogPage | TestChangelogTotalMatches |
 // | GET comments startAt/total | TestCommentsPage | TestCommentsMissingIssue |
+// | POST comment visibility / jsdPublic echo | TestCommentVisibilityRoundTrip / TestCommentInternalPropertySetsJsdPublicFalse | TestCommentRejectsBadVisibilityType / TestCommentPlainPostOmitsVisibilityAndJsdPublic |
+// | comment visibility persist + locale | TestCommentVisibilitySurvivesPersist | TestCommentVisibilityUnchangedUnderKoreanLocale |
 // | GET /project/search values/isLast | TestProjectSearch | TestProjectMissing |
 // | GET /project/{key} is a key; /{key}/… is 501 | TestProjectGetAndListUnchanged | TestProjectSubpathIsUnsupportedNotMissing |
 // | GET /priority order | TestPriorityOrder | TestPriorityLocaleOverlay |

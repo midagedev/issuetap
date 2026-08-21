@@ -45,7 +45,7 @@ func Inventory() []Route {
 		{Method: "GET", Path: "/rest/api/{v}/search", Level: Partial, Notes: "same evaluator as POST; Cloud GET /search/jql is 400 on the real site", Cloud: true, DC: true},
 		{Method: "GET", Path: "/rest/api/{v}/issue/{key}", Level: Supported, Notes: "expand=changelog", Cloud: true, DC: true},
 		{Method: "GET", Path: "/rest/api/{v}/issue/{key}/changelog", Level: Supported, Notes: "values/total/isLast", Cloud: true, DC: true},
-		{Method: "GET", Path: "/rest/api/{v}/issue/{key}/comment", Level: Supported, Notes: "startAt/maxResults/total", Cloud: true, DC: true},
+		{Method: "GET", Path: "/rest/api/{v}/issue/{key}/comment", Level: Supported, Notes: "startAt/maxResults/total; echoes stored visibility and jsdPublic (keys omitted when unset)", Cloud: true, DC: true},
 		{Method: "GET", Path: "/rest/api/{v}/issue/{key}/transitions", Level: Supported, Notes: "expand=transitions.fields includes fields ({} when the destination has no screen)", Cloud: true, DC: true},
 		{Method: "GET", Path: "/rest/api/{v}/issue/{key}/editmeta", Level: Partial, Notes: "summary/description/labels/priority/assignee/duedate/parent/issuetype + fixture custom fields; option allowedValues", Cloud: true, DC: true},
 		{Method: "GET", Path: "/rest/api/{v}/issue/createmeta", Level: Partial, Notes: "projects + issue types", Cloud: true, DC: true},
@@ -58,7 +58,7 @@ func Inventory() []Route {
 		// Cloud + DC Jira writes (gadak write.go)
 		{Method: "POST", Path: "/rest/api/{v}/issue", Level: Supported, Cloud: true, DC: true},
 		{Method: "PUT", Path: "/rest/api/{v}/issue/{key}", Level: Supported, Cloud: true, DC: true},
-		{Method: "POST", Path: "/rest/api/{v}/issue/{key}/comment", Level: Supported, Cloud: true, DC: true},
+		{Method: "POST", Path: "/rest/api/{v}/issue/{key}/comment", Level: Supported, Notes: "stores visibility {type:role|group,value} and sd.public.comment as jsdPublic; invalid type 400 errors.visibility", Cloud: true, DC: true},
 		{Method: "PUT", Path: "/rest/api/{v}/issue/{key}/assignee", Level: Supported, Cloud: true, DC: true},
 		{Method: "POST", Path: "/rest/api/{v}/issue/{key}/transitions", Level: Supported, Notes: "stores fields.resolution by catalog id; undeclared screen fields 400; done without a resolution defaults to 10000", Cloud: true, DC: true},
 		{Method: "POST", Path: "/rest/api/{v}/issue/{key}/attachments", Level: Supported, Notes: "requires X-Atlassian-Token: no-check", Cloud: true, DC: true},

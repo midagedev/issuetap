@@ -623,16 +623,26 @@ func (s *Server) getComments(w http.ResponseWriter, r *http.Request, key string)
 
 func (s *Server) postComment(w http.ResponseWriter, r *http.Request, key string) {
 	var body struct {
-		Body json.RawMessage `json:"body"`
+		Body       json.RawMessage         `json:"body"`
+		Visibility *model.Visibility       `json:"visibility"`
+		Properties []store.CommentProperty `json:"properties"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeJiraError(w, http.StatusBadRequest, "Invalid request body")
 		return
 	}
-	cm, err := s.st.AddComment(key, s.identity(r).AccountID, body.Body)
+	cm, err := s.st.WriteComment(key, s.identity(r).AccountID, store.CommentWrite{
+		Body:       body.Body,
+		Visibility: body.Visibility,
+		Properties: body.Properties,
+	})
 	if err != nil {
 		if store.IsNotFound(err) {
 			writeJiraError(w, http.StatusNotFound, "Issue does not exist")
+			return
+		}
+		if fe, ok := store.AsFieldError(err); ok {
+			writeJiraFieldErrors(w, fe.Map())
 			return
 		}
 		writeJiraWriteError(w, err)

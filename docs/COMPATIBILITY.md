@@ -62,14 +62,14 @@ Jira layout `2006-01-02T15:04:05.000-0700`.
 | Count | `POST /search/approximate-count` | Supported | Equals search length. |
 | Issue | `GET /issue/{key}` | Supported | `expand=changelog`. |
 | Changelog | `GET /issue/{key}/changelog` | Supported | `values` / `total` / `isLast`. |
-| Comments | `GET /issue/{key}/comment` | Supported | `startAt` / `maxResults` / `total`. |
+| Comments | `GET /issue/{key}/comment` | Supported | `startAt` / `maxResults` / `total`. Stored `visibility` (`type` role or group + `value`) and `jsdPublic` are echoed; both keys are omitted when unset. |
 | Filters | `GET /filter/my` | Supported | |
 | Users | `GET /user/search` | Supported | `query=me` is the `/myself` identity. |
 | Transitions | `GET/POST /issue/{key}/transitions` | Supported | Synthetic transitions to every other status. GET `?expand=transitions.fields` includes a `fields` object per transition (`{}` when the destination has no screen). POST stores `fields.resolution` by catalog id when the destination screen declares it; a field that is not on that screen is HTTP 400 `errors.<field>`. A required resolution omitted from the body is HTTP 400 `errors.resolution`. Entering done with no resolution (and none required) still fills `10000`. Leaving done clears resolution. `update.comment[].add.body` is stored as a comment. |
 | Edit meta | `GET /issue/{key}/editmeta` | Partial | summary, description, labels, priority (+allowedValues), assignee, duedate, parent, issuetype (+allowedValues), plus fixture custom fields (kind schema; option kinds include allowedValues). Not per-screen field config. |
 | Create meta | `GET /issue/createmeta` | Partial | projects + types. |
 | Create meta fields | `GET /issue/createmeta/{projectIdOrKey}/issuetypes/{id}` | Partial | fields list + startAt/maxResults/total. required/hasDefaultValue derived from CreateIssue (project, summary, issuetype, reporter required; issuetype/reporter/priority have defaults). Not per-screen field config. |
-| Writes | `POST /issue`, `PUT /issue/{key}`, `POST …/comment`, `PUT …/assignee`, `POST …/attachments` | Supported | Mutate the in-memory graph. Parent, when set, must exist and be exactly one `hierarchyLevel` above the child (type id, not name). Create 400: `errors.parent` and `errors.parentId`. Edit 400: `errors.pid`. |
+| Writes | `POST /issue`, `PUT /issue/{key}`, `POST …/comment`, `PUT …/assignee`, `POST …/attachments` | Supported | Mutate the in-memory graph. Parent, when set, must exist and be exactly one `hierarchyLevel` above the child (type id, not name). Create 400: `errors.parent` and `errors.parentId`. Edit 400: `errors.pid`. POST comment stores `visibility` (`type` must be role or group, `value` non-empty; no role/group existence check) and maps `properties` `sd.public.comment` `internal` to `jsdPublic` (`!internal`). Invalid `visibility.type` is HTTP 400 `errors.visibility`. |
 | Attachments | `GET /attachment/{id}`, `GET /attachment/content/{id}` | Supported | 302 to `/file/{uuid}/binary?name=`; the target serves the stored bytes. |
 | Spaces | `GET /wiki/rest/api/space`, `GET /wiki/rest/api/space/{key}` | Supported | |
 | CQL | `GET /wiki/rest/api/content/search` | Supported | `space`, `type`, `lastModified`; `_links.next`. |

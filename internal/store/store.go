@@ -841,10 +841,19 @@ func (s *Store) makeComment(c fixtures.Comment, fallback string) model.Comment {
 	created := first(c.Created, fallback)
 	updated := first(c.Updated, created)
 	author := s.userOrDefault(c.Author)
-	return model.Comment{
+	cm := model.Comment{
 		ID: id, Author: *author, Body: adf.Doc(c.Body), BodyText: c.Body,
 		Created: created, Updated: updated,
 	}
+	if c.Visibility != nil && (c.Visibility.Type != "" || c.Visibility.Value != "") {
+		vis := model.Visibility{Type: c.Visibility.Type, Value: c.Visibility.Value}
+		cm.Visibility = &vis
+	}
+	if c.Internal != nil {
+		jsd := !*c.Internal
+		cm.JsdPublic = &jsd
+	}
+	return cm
 }
 
 // makeAttach restores an attachment row. Content precedence: dataBase64
@@ -2048,7 +2057,7 @@ func (s *Store) ApplyTransition(key, transitionID, authorID string, fields, upda
 		}},
 	})
 	for _, body := range comments {
-		s.addCommentLocked(iss, authorID, body)
+		s.addCommentLocked(iss, authorID, body, nil, nil)
 	}
 	return s.markDirtyLocked()
 }
@@ -2141,19 +2150,83 @@ func parseTransitionComments(update map[string]any) ([][]byte, error) {
 	return out, nil
 }
 
-// AddComment posts a comment. body is ADF or a string.
+// CommentProperty is one Cloud comment property on POST /issue/{key}/comment.
+// Only key sd.public.comment is interpreted (value.internal → JsdPublic).
+type CommentProperty struct {
+	Key   string          `json:"key"`
+	Value json.RawMessage `json:"value"`
+}
+
+// CommentWrite is POST /issue/{key}/comment after HTTP has copied the
+// request shape. This method owns visibility type/value checks and
+// sd.public.comment parsing. Role/group existence is not checked.
+type CommentWrite struct {
+	Body       []byte
+	Visibility *model.Visibility
+	Properties []CommentProperty
+}
+
+const sdPublicCommentProperty = "sd.public.comment"
+
+// AddComment posts a comment with no visibility or JSM internal marker.
+// body is ADF or a string.
 func (s *Store) AddComment(key, authorID string, body []byte) (model.Comment, error) {
+	return s.WriteComment(key, authorID, CommentWrite{Body: body})
+}
+
+// WriteComment is POST /issue/{key}/comment. HTTP only copies shape.
+func (s *Store) WriteComment(key, authorID string, in CommentWrite) (model.Comment, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	iss := s.issues[key]
 	if iss == nil {
 		return model.Comment{}, errNotFound("issue", key)
 	}
-	cm := s.addCommentLocked(iss, authorID, body)
+	vis, err := normalizeCommentVisibility(in.Visibility)
+	if err != nil {
+		return model.Comment{}, err
+	}
+	jsd := jsdPublicFromProperties(in.Properties)
+	cm := s.addCommentLocked(iss, authorID, in.Body, vis, jsd)
 	return cm, s.markDirtyLocked()
 }
 
-func (s *Store) addCommentLocked(iss *model.Issue, authorID string, body []byte) model.Comment {
+func normalizeCommentVisibility(v *model.Visibility) (*model.Visibility, error) {
+	if v == nil {
+		return nil, nil
+	}
+	typeName := strings.TrimSpace(v.Type)
+	value := strings.TrimSpace(v.Value)
+	if typeName != "role" && typeName != "group" {
+		return nil, FieldError{Field: "visibility", Msg: "type must be role or group"}
+	}
+	if value == "" {
+		return nil, FieldError{Field: "visibility", Msg: "value is required"}
+	}
+	return &model.Visibility{Type: typeName, Value: value}, nil
+}
+
+func jsdPublicFromProperties(props []CommentProperty) *bool {
+	for _, p := range props {
+		if p.Key != sdPublicCommentProperty {
+			continue
+		}
+		var val struct {
+			Internal *bool `json:"internal"`
+		}
+		if err := json.Unmarshal(p.Value, &val); err != nil {
+			return nil
+		}
+		if val.Internal == nil {
+			return nil
+		}
+		jsd := !*val.Internal
+		return &jsd
+	}
+	return nil
+}
+
+func (s *Store) addCommentLocked(iss *model.Issue, authorID string, body []byte, vis *model.Visibility, jsd *bool) model.Comment {
 	text := adf.Plain(body)
 	if text == "" && len(body) > 0 && body[0] != '{' {
 		text = string(body)
@@ -2165,9 +2238,14 @@ func (s *Store) addCommentLocked(iss *model.Issue, authorID string, body []byte)
 	s.seqComment++
 	now := clock.Format(s.clk.Tick())
 	cm := model.Comment{
-		ID:     strconv.Itoa(90000 + s.seqComment),
-		Author: *s.userOrDefault(authorID),
-		Body:   body, BodyText: text, Created: now, Updated: now,
+		ID:         strconv.Itoa(90000 + s.seqComment),
+		Author:     *s.userOrDefault(authorID),
+		Body:       body,
+		BodyText:   text,
+		Created:    now,
+		Updated:    now,
+		Visibility: vis,
+		JsdPublic:  jsd,
 	}
 	iss.Comments = append(iss.Comments, cm)
 	iss.Updated = now
@@ -2870,9 +2948,17 @@ func (s *Store) issueToFix(iss *model.Issue) fixtures.Issue {
 		out.Versions = append(out.Versions, n.Name)
 	}
 	for _, c := range iss.Comments {
-		out.Comments = append(out.Comments, fixtures.Comment{
+		fc := fixtures.Comment{
 			ID: c.ID, Author: c.Author.AccountID, Body: c.BodyText, Created: c.Created, Updated: c.Updated,
-		})
+		}
+		if c.Visibility != nil {
+			fc.Visibility = &fixtures.CommentVisibility{Type: c.Visibility.Type, Value: c.Visibility.Value}
+		}
+		if c.JsdPublic != nil {
+			internal := !*c.JsdPublic
+			fc.Internal = &internal
+		}
+		out.Comments = append(out.Comments, fc)
 	}
 	for _, a := range iss.Attachments {
 		fa := fixtures.Attachment{

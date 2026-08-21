@@ -154,6 +154,19 @@ type Comment struct {
 	Body    string `json:"body" yaml:"body"`
 	Created string `json:"created,omitempty" yaml:"created,omitempty"`
 	Updated string `json:"updated,omitempty" yaml:"updated,omitempty"`
+	// Visibility is optional. Omitted on existing fixtures (unrestricted).
+	Visibility *CommentVisibility `json:"visibility,omitempty" yaml:"visibility,omitempty"`
+	// Internal is the authored form of JSM sd.public.comment
+	// (internal:true → served jsdPublic:false). Omitted when unset so
+	// existing fixtures stay key-identical.
+	Internal *bool `json:"internal,omitempty" yaml:"internal,omitempty"`
+}
+
+// CommentVisibility is a restricted comment audience in a fixture.
+// Type is role or group; existence of that role/group is not checked.
+type CommentVisibility struct {
+	Type  string `json:"type,omitempty" yaml:"type,omitempty"`
+	Value string `json:"value,omitempty" yaml:"value,omitempty"`
 }
 
 type Attachment struct {

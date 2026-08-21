@@ -62,8 +62,8 @@ func (s *Server) userJSON(u model.User) map[string]any {
 func (s *Server) statusJSON(st model.Status) map[string]any {
 	st = locale.OverlayStatus(s.st.Locale(), st)
 	return map[string]any{
-		"id":   st.ID,
-		"name": st.Name,
+		"id":               st.ID,
+		"name":             st.Name,
 		"untranslatedName": firstNonEmpty(st.Untranslated, st.Name),
 		"statusCategory": map[string]any{
 			"id":        st.StatusCategory.ID,
@@ -77,11 +77,11 @@ func (s *Server) statusJSON(st model.Status) map[string]any {
 func (s *Server) typeJSON(t model.IssueType) map[string]any {
 	t = locale.OverlayIssueType(s.st.Locale(), t)
 	return map[string]any{
-		"id":             t.ID,
-		"name":           t.Name,
+		"id":               t.ID,
+		"name":             t.Name,
 		"untranslatedName": firstNonEmpty(t.Untranslated, t.Name),
-		"hierarchyLevel": t.HierarchyLevel,
-		"subtask":        t.Subtask,
+		"hierarchyLevel":   t.HierarchyLevel,
+		"subtask":          t.Subtask,
 	}
 }
 
@@ -270,13 +270,23 @@ func (s *Server) bodyForDialect(raw json.RawMessage, text string) any {
 }
 
 func (s *Server) commentJSON(c model.Comment) map[string]any {
-	return map[string]any{
+	out := map[string]any{
 		"id":      c.ID,
 		"author":  s.userJSON(c.Author),
 		"body":    s.bodyForDialect(c.Body, c.BodyText),
 		"created": c.Created,
 		"updated": c.Updated,
 	}
+	if c.Visibility != nil {
+		out["visibility"] = map[string]any{
+			"type":  c.Visibility.Type,
+			"value": c.Visibility.Value,
+		}
+	}
+	if c.JsdPublic != nil {
+		out["jsdPublic"] = *c.JsdPublic
+	}
+	return out
 }
 
 func (s *Server) attachJSON(r *http.Request, a model.Attachment) map[string]any {

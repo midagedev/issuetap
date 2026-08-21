@@ -2039,6 +2039,18 @@ func (s *Store) UpdateIssue(key string, fields, update map[string]any) error {
 	if err := applyUpdateOps(iss, update); err != nil {
 		return err
 	}
+	var parentKey *string
+	if raw, ok := fields["parent"]; ok {
+		childTypeID := iss.IssueTypeID
+		if id := pickID(fields["issuetype"]); id != "" {
+			childTypeID = id
+		}
+		k, err := s.resolveParentLocked(childTypeID, pickKey(raw))
+		if err != nil {
+			return parentFieldError(err, parentEditKeys)
+		}
+		parentKey = &k
+	}
 	for k, v := range fields {
 		switch k {
 		case "summary":
@@ -2054,7 +2066,9 @@ func (s *Store) UpdateIssue(key string, fields, update map[string]any) error {
 		case "issuetype":
 			iss.IssueTypeID = pickID(v)
 		case "parent":
-			iss.ParentKey = pickKey(v)
+			if parentKey != nil {
+				iss.ParentKey = *parentKey
+			}
 		case "duedate":
 			if err := setDueDate(iss, v); err != nil {
 				return err
@@ -2190,6 +2204,11 @@ func (s *Store) CreateIssue(fields map[string]any) (*model.Issue, error) {
 	if _, ok := s.projects[project]; !ok {
 		s.putProject(fixtures.Project{Key: project, Name: project})
 	}
+	typeID := first(pickID(fields["issuetype"]), "10003")
+	parentKey, err := s.resolveParentLocked(typeID, pickKey(fields["parent"]))
+	if err != nil {
+		return nil, parentFieldError(err, parentCreateKeys)
+	}
 	s.seqIssue++
 	n := s.nextKeyNum(project)
 	key := fmt.Sprintf("%s-%d", project, n)
@@ -2197,14 +2216,14 @@ func (s *Store) CreateIssue(fields map[string]any) (*model.Issue, error) {
 	iss := &model.Issue{
 		ID: strconv.Itoa(10000 + s.seqIssue), Key: key, Summary: summary,
 		ProjectKey:  project,
-		IssueTypeID: first(pickID(fields["issuetype"]), "10003"),
+		IssueTypeID: typeID,
 		StatusID:    "10000",
 		PriorityID:  first(pickID(fields["priority"]), "3"),
 		AssigneeID:  pickID(fields["assignee"]),
 		ReporterID:  pickID(fields["reporter"]),
 		Created:     now, Updated: now,
 		Labels:    stringSlice(fields["labels"]),
-		ParentKey: pickKey(fields["parent"]),
+		ParentKey: parentKey,
 	}
 	if iss.ReporterID == "" {
 		iss.ReporterID = s.userOrDefault("").AccountID
@@ -2312,6 +2331,115 @@ func pickKey(v any) string {
 	return ""
 }
 
+// parentCreateKeys / parentEditKeys are Cloud's errors-map keys for an
+// illegal parent, measured on a live site 2026-08-21. Create reports both
+// parent and parentId; edit reports pid only.
+var (
+	parentCreateKeys = []string{"parent", "parentId"}
+	parentEditKeys   = []string{"pid"}
+)
+
+func parentFieldError(err error, keys []string) FieldError {
+	fe := FieldError{Field: keys[0], Msg: err.Error()}
+	if len(keys) > 1 {
+		fe.Also = append([]string{}, keys[1:]...)
+	}
+	return fe
+}
+
+func validParentLevel(parentLevel, childLevel int) bool {
+	return parentLevel == childLevel+1
+}
+
+func (s *Store) issueByParentRefLocked(ref string) *model.Issue {
+	if iss := s.issues[ref]; iss != nil {
+		return iss
+	}
+	for _, iss := range s.issues {
+		if iss.ID == ref {
+			return iss
+		}
+	}
+	return nil
+}
+
+func (s *Store) typeNameAtLevelLocked(level int) string {
+	var best *model.IssueType
+	for _, t := range s.types {
+		if t.HierarchyLevel != level {
+			continue
+		}
+		if best == nil || t.ID < best.ID {
+			best = t
+		}
+	}
+	if best == nil {
+		return fmt.Sprintf("hierarchyLevel %d", level)
+	}
+	return best.Name
+}
+
+// resolveParentLocked is the single parent-hierarchy judgment used by
+// CreateIssue and UpdateIssue. An empty ref clears the parent. A present
+// ref must name an existing issue whose type.hierarchyLevel is exactly one
+// above the child's. Names are used only in the error text.
+func (s *Store) resolveParentLocked(childTypeID, parentRef string) (string, error) {
+	if parentRef == "" {
+		return "", nil
+	}
+	parent := s.issueByParentRefLocked(parentRef)
+	if parent == nil {
+		return "", fmt.Errorf("parent %s does not exist", parentRef)
+	}
+	childType := s.types[childTypeID]
+	if childType == nil {
+		return "", fmt.Errorf("unknown issue type %s", childTypeID)
+	}
+	parentType := s.types[parent.IssueTypeID]
+	if parentType == nil {
+		return "", fmt.Errorf("parent %s has unknown issue type %s", parent.Key, parent.IssueTypeID)
+	}
+	if !validParentLevel(parentType.HierarchyLevel, childType.HierarchyLevel) {
+		want := s.typeNameAtLevelLocked(childType.HierarchyLevel + 1)
+		return "", fmt.Errorf("%s cannot be a parent of %s; a parent must be one level above (%s)", parentType.Name, childType.Name, want)
+	}
+	return parent.Key, nil
+}
+
+// InvalidParentCount reports how many snapshot issues name a parent that
+// is missing or not exactly one hierarchyLevel above the child. Load does
+// not rewrite those links; this count is for diagnostics.
+func InvalidParentCount(doc fixtures.Doc) int {
+	types := map[string]fixtures.IssueType{}
+	for _, t := range doc.IssueTypes {
+		types[t.ID] = t
+		if t.Name != "" {
+			types[t.Name] = t
+		}
+	}
+	byKey := map[string]fixtures.Issue{}
+	for _, iss := range doc.Issues {
+		byKey[iss.Key] = iss
+	}
+	n := 0
+	for _, iss := range doc.Issues {
+		if iss.Parent == "" {
+			continue
+		}
+		parent, ok := byKey[iss.Parent]
+		if !ok {
+			n++
+			continue
+		}
+		childT, cok := types[iss.Type]
+		parentT, pok := types[parent.Type]
+		if !cok || !pok || !validParentLevel(parentT.HierarchyLevel, childT.HierarchyLevel) {
+			n++
+		}
+	}
+	return n
+}
+
 func stringSlice(v any) []string {
 	switch t := v.(type) {
 	case []string:
@@ -2338,6 +2466,9 @@ func errNotFound(kind, id string) error { return notFoundError{kind, id} }
 type FieldError struct {
 	Field string
 	Msg   string
+	// Also are extra errors-map keys that carry the same Msg. Create-parent
+	// rejections set this to ["parentId"]; most field errors leave it empty.
+	Also []string
 }
 
 func (e FieldError) Error() string {
@@ -2345,6 +2476,20 @@ func (e FieldError) Error() string {
 		return e.Msg
 	}
 	return e.Field + ": " + e.Msg
+}
+
+// Map is the Jira errors object for this rejection.
+func (e FieldError) Map() map[string]string {
+	m := map[string]string{}
+	if e.Field != "" {
+		m[e.Field] = e.Msg
+	}
+	for _, k := range e.Also {
+		if k != "" {
+			m[k] = e.Msg
+		}
+	}
+	return m
 }
 
 // AsFieldError unwraps a FieldError.

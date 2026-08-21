@@ -21,3 +21,7 @@
     paginated `fields` list whose required/hasDefaultValue flags are
     derived from CreateIssue (summary required; issuetype/reporter/priority
     have defaults).
+13. Parent hierarchy on create and edit: parent must exist and be exactly
+    one `hierarchyLevel` above the child (id/level keyed). Create 400 uses
+    `parent`+`parentId`; edit 400 uses `pid`. Existing persist rows are not
+    rewritten; diagnostics counts them.

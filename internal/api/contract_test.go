@@ -33,6 +33,7 @@ package api_test
 // | Create meta fields list + required/defaults | TestCreateMetaFieldsShape | TestCreateMetaFieldsMissingProjectAndType |
 // | Create meta pagination | TestCreateMetaFieldsPagination | TestCreateMetaFieldsPaginationEmptyPage |
 // | Create advertised required ↔ POST | TestCreateMetaFieldsRoundTrip | TestCreateIssueRejectsEmptySummary |
+// | Parent hierarchy (level+1, exist) | TestPostIssueAcceptsLegalHierarchy | TestPostIssueRejectsSameLevelParent / TestPutIssueRejectsSameLevelParentWithPidKey |
 // | Custom option registry validation | TestRegisteredOptionRejectsUnknownID | TestUnregisteredCustomFieldStillFree |
 // | DC startAt search | TestDCSearch | TestDCWikiMarkupBody |
 // | determinism: same seed → same snapshot | TestDeterminism | (diff empty) |

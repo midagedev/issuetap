@@ -584,7 +584,7 @@ func (s *Server) putIssue(w http.ResponseWriter, r *http.Request, key string) {
 			return
 		}
 		if fe, ok := store.AsFieldError(err); ok {
-			writeJiraFieldErrors(w, map[string]string{fe.Field: fe.Msg})
+			writeJiraFieldErrors(w, fe.Map())
 			return
 		}
 		writeJiraWriteError(w, err)
@@ -739,7 +739,7 @@ func (s *Server) postIssue(w http.ResponseWriter, r *http.Request) {
 	iss, err := s.st.CreateIssue(body.Fields)
 	if err != nil {
 		if fe, ok := store.AsFieldError(err); ok {
-			writeJiraFieldErrors(w, map[string]string{fe.Field: fe.Msg})
+			writeJiraFieldErrors(w, fe.Map())
 			return
 		}
 		writeJiraWriteError(w, err)

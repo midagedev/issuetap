@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/midagedev/issuetap/internal/fixtures"
+	"github.com/midagedev/issuetap/internal/store"
 )
 
 // Input is everything the bundle needs. Traces must already be redacted
@@ -108,6 +109,10 @@ func diagnose(in Input) map[string]any {
 	if in.Counts["issues"] == 0 {
 		causes = append(causes, "the graph has zero issues")
 		next = append(next, "Apply a fixture: issuetap fixtures apply examples/fixtures/tiny.yaml")
+	}
+	if n := store.InvalidParentCount(in.Snapshot); n > 0 {
+		causes = append(causes, fmt.Sprintf("%d issue parent links violate hierarchy: parent must exist and be exactly one hierarchyLevel above the child", n))
+		next = append(next, "Inspect snapshot.json issues[].parent against issueTypes[].hierarchyLevel. Load keeps the links; POST/PUT /issue rejects new ones.")
 	}
 	if len(causes) == 0 {
 		causes = append(causes, "no automatic diagnosis — inspect traces.json and snapshot.json")

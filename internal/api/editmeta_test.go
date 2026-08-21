@@ -71,6 +71,20 @@ func TestEditMetaAdvertisedFieldsAccepted(t *testing.T) {
 	ts := testServer(t, locale.EN, dialect.Cloud)
 	defer ts.Close()
 	fields := editMetaFields(t, ts, "TAP-2")
+	// TAP-2 is a Task (level 0); TAP-1 is a Bug (also level 0). Cloud
+	// rejects same-level parents, so the advertised parent PUT uses an Epic.
+	epicRes := authPost(t, ts, "/rest/api/3/issue", map[string]any{
+		"fields": map[string]any{
+			"project":   map[string]any{"key": "TAP"},
+			"summary":   "epic for parent PUT",
+			"issuetype": map[string]any{"id": "10000"},
+		},
+	})
+	epicBody := decode(t, epicRes)
+	epicKey, _ := epicBody["key"].(string)
+	if epicRes.StatusCode != http.StatusCreated || epicKey == "" {
+		t.Fatalf("need an Epic to PUT a legal parent, status %d body=%v", epicRes.StatusCode, epicBody)
+	}
 	// One valid PUT body per advertised system field. Custom option
 	// fields are covered by the registry tests.
 	puts := map[string]any{
@@ -80,7 +94,7 @@ func TestEditMetaAdvertisedFieldsAccepted(t *testing.T) {
 		"priority":    map[string]any{"id": "1"},
 		"assignee":    map[string]any{"accountId": "5b10a2844c20165700ede22g"},
 		"duedate":     "2026-09-01",
-		"parent":      map[string]any{"key": "TAP-1"},
+		"parent":      map[string]any{"key": epicKey},
 		"issuetype":   map[string]any{"id": "10007"},
 	}
 	for id := range fields {

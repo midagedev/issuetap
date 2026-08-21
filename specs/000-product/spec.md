@@ -63,7 +63,12 @@ registry. Option-shaped custom fields include `allowedValues`.
 first-class `YYYY-MM-DD` string on the issue (not a `Custom` map entry);
 a malformed date is HTTP 400. A registered option field rejects an
 unknown option id with HTTP 400; an unregistered custom field id still
-stores freely (backward compatible).
+stores freely (backward compatible). A parent, when set, must name an
+existing issue whose `hierarchyLevel` is exactly one above the child's
+(keyed on type id, not the localized name). Same-level and reverse
+parents are HTTP 400; `errors` carries `pid` on edit. Persist/fixture
+rows that already break the rule still load — diagnostics reports the
+count.
 
 The field registry is the single owner of "what is editable and which
 values are allowed". editmeta and UpdateIssue both derive from it. There
@@ -91,7 +96,10 @@ requires and fills:
 `POST /issue` rejects a missing or empty `summary` with Jira's
 per-field 400 (`errors.summary`). Filling every advertised required
 field succeeds. A missing project or issue type on the createmeta
-fields URL is HTTP 404 (the route is implemented — not 501).
+fields URL is HTTP 404 (the route is implemented — not 501). A parent,
+when set, must exist and sit exactly one `hierarchyLevel` above the
+child; create 400s with `errors.parent` and `errors.parentId`. Omitting
+parent stays allowed (sub-task-requires-parent is out of scope).
 
 ## Non-goals
 

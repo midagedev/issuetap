@@ -24,3 +24,4 @@
 - [x] CreateIssue rejects empty/missing summary (Jira per-field 400)
 - [x] Advertised-required ↔ POST /issue contract tests (FAIL-first)
 - [x] Gadak CreateFields conformance: required set from the new endpoint
+- [x] Parent hierarchy: POST/PUT reject same-level and missing parents (FAIL-first; create keys `parent`+`parentId`, edit key `pid`; diagnostics counts existing violations)

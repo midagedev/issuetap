@@ -309,7 +309,9 @@ func (s *Server) postProject(w http.ResponseWriter, r *http.Request) {
 	}
 	p, err := s.st.CreateProject(body.Key, body.Name)
 	if err != nil {
-		writeJiraError(w, http.StatusBadRequest, err.Error())
+		// A durable-persist failure is a 500 (retry), not a 400 (bad
+		// request); writeJiraWriteError splits them (GDK-537 audit).
+		writeJiraWriteError(w, err)
 		return
 	}
 	writeJSON(w, http.StatusCreated, map[string]any{

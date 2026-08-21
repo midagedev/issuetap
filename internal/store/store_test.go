@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/midagedev/issuetap/internal/fixtures"
+	"github.com/midagedev/issuetap/internal/model"
 	"github.com/midagedev/issuetap/internal/locale"
 )
 
@@ -123,5 +124,24 @@ issues:
 `), ".yaml")
 	if err == nil {
 		t.Fatal("expected duplicate key error")
+	}
+}
+
+func TestLinkDevPRBumpsIssueUpdated(t *testing.T) {
+	st := loadTiny(t)
+	before := st.Issue("TAP-1")
+	if before == nil {
+		t.Fatal("TAP-1 missing")
+	}
+	prev := before.Updated
+	if _, err := st.LinkDevPR("TAP-1", model.DevPR{URL: "https://github.com/x/y/pull/1", Status: "OPEN"}); err != nil {
+		t.Fatal(err)
+	}
+	after := st.Issue("TAP-1")
+	if after.Updated == prev {
+		t.Fatalf("issue.Updated did not advance after LinkDevPR: still %q (GDK-537)", prev)
+	}
+	if len(after.DevPRs) != 1 {
+		t.Fatalf("dev PR not stored: %v", after.DevPRs)
 	}
 }

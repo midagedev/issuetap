@@ -1360,6 +1360,11 @@ func (s *Store) LinkDevPR(keyOrID string, pr model.DevPR) (model.DevPR, error) {
 	if pr.ID == "" {
 		pr.ID = pr.URL
 	}
+	// A dev-PR link is a change to the issue: bump issue.Updated so gadak's
+	// incremental sync (updated >= watermark) actually pulls it. Without this
+	// the PR lands in the persist file but stays invisible until some other
+	// mutation moves the watermark (GDK-537).
+	iss.Updated = pr.Updated
 	for i := range iss.DevPRs {
 		if iss.DevPRs[i].URL == pr.URL {
 			if pr.Name == "" {

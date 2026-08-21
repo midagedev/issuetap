@@ -16,6 +16,7 @@ import (
 	"strings"
 
 	"github.com/midagedev/issuetap/internal/model"
+	"github.com/midagedev/issuetap/internal/store"
 )
 
 func (s *Server) handleDevStatus(w http.ResponseWriter, r *http.Request, path string) {
@@ -160,7 +161,14 @@ func (s *Server) postDevLink(w http.ResponseWriter, r *http.Request) {
 	}
 	pr, err := s.st.LinkDevPR(body.IssueID, model.DevPR{URL: body.URL, Name: body.Name, Status: status})
 	if err != nil {
-		writeJiraError(w, http.StatusNotFound, "Issue does not exist")
+		if store.IsNotFound(err) {
+			writeJiraError(w, http.StatusNotFound, "Issue does not exist")
+			return
+		}
+		// A persist failure kept the link in memory but not on disk; report
+		// it as a 500 so the caller retries, instead of masking it as a
+		// missing issue (GDK-537 audit).
+		writeJiraWriteError(w, err)
 		return
 	}
 	writeJSON(w, http.StatusCreated, pr)

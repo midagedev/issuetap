@@ -16,9 +16,10 @@ type jiraError struct {
 }
 
 type issuetapMeta struct {
-	Code   string `json:"code"`
-	Method string `json:"method"`
-	Path   string `json:"path"`
+	Code    string `json:"code"`
+	Method  string `json:"method"`
+	Path    string `json:"path"`
+	Suggest string `json:"suggest,omitempty"`
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
@@ -57,11 +58,20 @@ func writeJiraFieldErrors(w http.ResponseWriter, fields map[string]string) {
 // writeUnsupported is the honest coverage-gap response. A 404 would look
 // like "your client is broken"; a plausible lie would look like "the
 // endpoint works". Consumers key on issuetap.code == "unsupported_endpoint".
+// When Inventory has exactly one conservative sibling, the message names
+// it and issuetap.suggest carries the same "METHOD /path" string; otherwise
+// the envelope is the historical one-line form.
 func writeUnsupported(w http.ResponseWriter, method, path string) {
+	msg := "issuetap does not implement " + method + " " + path
+	meta := &issuetapMeta{Code: "unsupported_endpoint", Method: method, Path: path}
+	if sug := SuggestImplemented(method, path); sug != "" {
+		msg += "; did you mean " + sug + "?"
+		meta.Suggest = sug
+	}
 	writeJSON(w, http.StatusNotImplemented, jiraError{
-		ErrorMessages: []string{"issuetap does not implement " + method + " " + path},
+		ErrorMessages: []string{msg},
 		Errors:        map[string]string{"endpoint": "unsupported_endpoint"},
-		Issuetap:      &issuetapMeta{Code: "unsupported_endpoint", Method: method, Path: path},
+		Issuetap:      meta,
 	})
 }
 

@@ -79,10 +79,13 @@ Flags for serve:
   --email         accepted Basic user (empty = any)
   --token         accepted Basic password / Bearer PAT (empty = any non-empty)
   --scenario      scenario file to apply (faults + locale) on start
-  --persist       write-through state file: mutations are saved (debounced,
-                  atomic replace) and reloaded on restart. When the file
-                  exists it supersedes --fixture and the scenario fixture;
-                  delete it to reseed from the fixture.
+  --persist       write-through state file: mutations are saved (atomic
+                  replace) before the HTTP response returns, and reloaded
+                  on restart. When the file exists it supersedes --fixture
+                  and the scenario fixture; delete it to reseed from the
+                  fixture.
+  --persist-debounce  lab-only quiet window before writing --persist
+                  (e.g. 1s). Omitted means write before the response returns.
 `)
 }
 
@@ -99,6 +102,7 @@ func cmdServe(args []string) error {
 	token := fs.String("token", cfg.Token, "accepted token")
 	scenario := fs.String("scenario", "", "scenario file to apply on start")
 	persist := fs.String("persist", cfg.Snapshot, "write-through persistence file (ISSUETAP_SNAPSHOT)")
+	persistDebounce := fs.Duration("persist-debounce", 0, "lab-only quiet window before writing --persist; omitted writes the file before the HTTP response returns")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -117,7 +121,7 @@ func cmdServe(args []string) error {
 		}
 	})
 
-	st, eng, err := loadServeGraph(cfg, *scenario, localeFromCLI, *persist)
+	st, eng, err := loadServeGraph(cfg, *scenario, localeFromCLI, *persist, *persistDebounce)
 	if err != nil {
 		return err
 	}
@@ -159,10 +163,15 @@ func cmdServe(args []string) error {
 // scenario faults and locale still apply. When localeFromCLI is true
 // (--locale or ISSUETAP_LOCALE), that locale is applied last so it wins
 // over the fixture locale: field.
-func loadServeGraph(cfg config.Config, scenarioPath string, localeFromCLI bool, persist string) (*store.Store, *faults.Engine, error) {
+func loadServeGraph(cfg config.Config, scenarioPath string, localeFromCLI bool, persist string, persistDebounce time.Duration) (*store.Store, *faults.Engine, error) {
+	if persistDebounce == 0 {
+		// serve --persist default: durable-before-return (store treats
+		// negative as write-on-mutation). --persist-debounce is lab-only.
+		persistDebounce = -1
+	}
 	st := store.New(store.Options{
 		Seed: cfg.Seed, Locale: cfg.Locale,
-		PersistPath: persist, PersistDebounce: store.DefaultPersistDebounce,
+		PersistPath: persist, PersistDebounce: persistDebounce,
 	})
 	loadedPersist := false
 	if persist != "" {

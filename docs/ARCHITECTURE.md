@@ -23,9 +23,11 @@ web/                  Svelte lab dashboard, built into dist/app
 
 In-memory. Snapshot/restore is a fixture document. There is no database.
 Determinism is the point; durability is opt-in: `--persist <file>` (or
-`EmbeddedConfig.PersistPath`) debounces every mutation to one YAML file
+`EmbeddedConfig.PersistPath`) saves every mutation to one YAML file
 written atomically (same-directory temp file + rename) and reloads it on
-the next start. A restart also re-seeds the id sequences and jumps the
+the next start. `serve --persist` writes before the HTTP response returns;
+a debounced quiet window is lab-only (`--persist-debounce`, or a positive
+`PersistDebounce` in embed). A restart also re-seeds the id sequences and jumps the
 deterministic clock past the newest loaded timestamp, so post-restart
 mutations never collide with restored ids or sort before existing rows.
 Deleting the file reseeds from the fixture.

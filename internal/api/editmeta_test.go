@@ -29,7 +29,7 @@ func TestEditMetaSystemFields(t *testing.T) {
 	ts := testServer(t, locale.EN, dialect.Cloud)
 	defer ts.Close()
 	fields := editMetaFields(t, ts, "TAP-1")
-	want := []string{"summary", "description", "labels", "priority", "assignee", "duedate", "parent", "issuetype"}
+	want := []string{"summary", "description", "labels", "priority", "assignee", "duedate", "parent", "issuetype", "fixVersions", "components"}
 	for _, id := range want {
 		raw, ok := fields[id]
 		if !ok {
@@ -96,6 +96,8 @@ func TestEditMetaAdvertisedFieldsAccepted(t *testing.T) {
 		"duedate":     "2026-09-01",
 		"parent":      map[string]any{"key": epicKey},
 		"issuetype":   map[string]any{"id": "10007"},
+		"fixVersions": []any{map[string]any{"name": "2026.8"}},
+		"components":  []any{map[string]any{"name": "Core"}},
 	}
 	for id := range fields {
 		if _, ok := puts[id]; !ok {

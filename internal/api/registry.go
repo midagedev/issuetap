@@ -39,6 +39,7 @@ func Inventory() []Route {
 		{Method: "GET", Path: "/rest/api/{v}/field", Level: Supported, Notes: "catalog names localize", Cloud: true, DC: true},
 		{Method: "GET", Path: "/rest/api/{v}/project/search", Level: Supported, Notes: "values/isLast/total/startAt", Cloud: true, DC: false},
 		{Method: "GET", Path: "/rest/api/{v}/project", Level: Supported, Notes: "DC project list (array)", Cloud: true, DC: true},
+		{Method: "POST", Path: "/rest/api/{v}/project", Level: Supported, Notes: "key and name; duplicate or invalid key 400", Cloud: true, DC: true},
 		{Method: "GET", Path: "/rest/api/{v}/project/{key}", Level: Supported, Cloud: true, DC: true},
 		{Method: "POST", Path: "/rest/api/{v}/search/jql", Level: Supported, Notes: "nextPageToken/isLast; Cloud only", Cloud: true, DC: false},
 		{Method: "POST", Path: "/rest/api/{v}/search/approximate-count", Level: Supported, Cloud: true, DC: false},
@@ -48,9 +49,9 @@ func Inventory() []Route {
 		{Method: "GET", Path: "/rest/api/{v}/issue/{key}/changelog", Level: Supported, Notes: "values/total/isLast", Cloud: true, DC: true},
 		{Method: "GET", Path: "/rest/api/{v}/issue/{key}/comment", Level: Supported, Notes: "startAt/maxResults/total; echoes stored visibility and jsdPublic (keys omitted when unset)", Cloud: true, DC: true},
 		{Method: "GET", Path: "/rest/api/{v}/issue/{key}/transitions", Level: Supported, Notes: "expand=transitions.fields includes fields ({} when the destination has no screen)", Cloud: true, DC: true},
-		{Method: "GET", Path: "/rest/api/{v}/issue/{key}/editmeta", Level: Partial, Notes: "summary/description/labels/priority/assignee/duedate/parent/issuetype + fixture custom fields; option allowedValues", Cloud: true, DC: true},
+		{Method: "GET", Path: "/rest/api/{v}/issue/{key}/editmeta", Level: Partial, Notes: "summary/description/labels/priority/assignee/duedate/parent/issuetype/fixVersions/components + fixture custom fields; option and named-list allowedValues", Cloud: true, DC: true},
 		{Method: "GET", Path: "/rest/api/{v}/issue/createmeta", Level: Partial, Notes: "projects + issue types", Cloud: true, DC: true},
-		{Method: "GET", Path: "/rest/api/{v}/issue/createmeta/{projectIdOrKey}/issuetypes/{id}", Level: Partial, Notes: "fields list + startAt/maxResults/total; required/hasDefaultValue from CreateIssue; not per-screen", Cloud: true, DC: true},
+		{Method: "GET", Path: "/rest/api/{v}/issue/createmeta/{projectIdOrKey}/issuetypes/{id}", Level: Partial, Notes: "fields list + startAt/maxResults/total; required/hasDefaultValue from CreateIssue; fixVersions/components optional; not per-screen", Cloud: true, DC: true},
 		{Method: "GET", Path: "/rest/api/{v}/filter/my", Level: Supported, Cloud: true, DC: true},
 		{Method: "GET", Path: "/rest/api/{v}/user/search", Level: Supported, Notes: "query=me is the /myself identity", Cloud: true, DC: true},
 		{Method: "GET", Path: "/rest/api/{v}/attachment/{id}", Level: Supported, Cloud: true, DC: true},
@@ -64,6 +65,11 @@ func Inventory() []Route {
 		{Method: "POST", Path: "/rest/api/{v}/issue/{key}/transitions", Level: Supported, Notes: "stores fields.resolution by catalog id; undeclared screen fields 400; done without a resolution defaults to 10000", Cloud: true, DC: true},
 		{Method: "POST", Path: "/rest/api/{v}/issue/{key}/attachments", Level: Supported, Notes: "requires X-Atlassian-Token: no-check", Cloud: true, DC: true},
 		{Method: "POST", Path: "/rest/api/{v}/issueLink", Level: Supported, Notes: "stores the pair on both issues; unknown type 404; missing issue 404; self-link 400; duplicate same type/pair/direction is idempotent 201", Cloud: true, DC: true},
+
+		// Cloud development panel (gadak GDK-497)
+		{Method: "GET", Path: "/rest/dev-status/{v}/issue/summary", Level: Supported, Notes: "pullrequest counts; other blocks zero-valued", Cloud: true, DC: false},
+		{Method: "GET", Path: "/rest/dev-status/{v}/issue/detail", Level: Supported, Notes: "applicationType and dataType required; Cloud 500 param shape", Cloud: true, DC: false},
+		{Method: "POST", Path: "/rest/dev-status/{v}/issue/link", Level: Supported, Notes: "upserts one pull-request link by URL", Cloud: true, DC: false},
 
 		// Confluence Cloud (gadak confluence.Client)
 		{Method: "GET", Path: "/wiki/rest/api/space", Level: Supported, Cloud: true, DC: false},

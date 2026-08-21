@@ -2,7 +2,10 @@ package api_test
 
 import (
 	"encoding/json"
+	"fmt"
+	"io"
 	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/midagedev/issuetap/internal/dialect"
@@ -88,4 +91,48 @@ func TestDevStatusLinkSummaryDetail(t *testing.T) {
 		t.Fatalf("bad status accepted: %d", res.StatusCode)
 	}
 	res.Body.Close()
+}
+
+func TestDevStatusUnknownSubpathIs501(t *testing.T) {
+	ts := testServer(t, locale.EN, dialect.Cloud)
+	defer ts.Close()
+	res := authGet(t, ts, "/rest/dev-status/1.0/branch")
+	raw, _ := io.ReadAll(res.Body)
+	res.Body.Close()
+	if res.StatusCode == http.StatusNotFound {
+		t.Fatalf("unsupported dev-status subpath returned 404; body=%s", raw)
+	}
+	if res.StatusCode != http.StatusNotImplemented {
+		t.Fatalf("status %d want 501 body=%s", res.StatusCode, raw)
+	}
+	if !strings.Contains(string(raw), "unsupported_endpoint") {
+		t.Fatalf("body=%s", raw)
+	}
+}
+
+func TestCompatibilityInventoryIncludesRecentRoutes(t *testing.T) {
+	ts := testServer(t, locale.EN, dialect.Cloud)
+	defer ts.Close()
+	res, err := http.Get(ts.URL + "/api/compatibility")
+	if err != nil {
+		t.Fatal(err)
+	}
+	v := decode(t, res)
+	raw, _ := v["routes"].([]any)
+	got := map[string]bool{}
+	for _, item := range raw {
+		row, _ := item.(map[string]any)
+		got[fmt.Sprint(row["Method"])+" "+fmt.Sprint(row["Path"])] = true
+	}
+	want := []string{
+		"POST /rest/api/{v}/project",
+		"GET /rest/dev-status/{v}/issue/summary",
+		"GET /rest/dev-status/{v}/issue/detail",
+		"POST /rest/dev-status/{v}/issue/link",
+	}
+	for _, w := range want {
+		if !got[w] {
+			t.Errorf("GET /api/compatibility missing %s", w)
+		}
+	}
 }

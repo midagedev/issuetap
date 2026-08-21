@@ -164,7 +164,7 @@ func (s *Server) issueJSON(r *http.Request, iss *model.Issue, fields []string, e
 	}
 	links := make([]any, 0, len(iss.Links))
 	for _, l := range iss.Links {
-		obj := map[string]any{"type": map[string]any{"name": l.TypeName}}
+		obj := map[string]any{"type": issueLinkTypeFields(l.TypeName)}
 		if l.OutwardKey != "" {
 			obj["outwardIssue"] = map[string]any{"key": l.OutwardKey}
 		}
@@ -363,6 +363,19 @@ func (s *Server) historyJSON(h model.History) map[string]any {
 	return map[string]any{
 		"id": h.ID, "created": h.Created, "author": s.userJSON(h.Author), "items": items,
 	}
+}
+
+func issueLinkTypeFields(name string) map[string]any {
+	obj := map[string]any{"name": name}
+	for _, lt := range model.DefaultIssueLinkTypes() {
+		if lt.Name == name {
+			obj["id"] = lt.ID
+			obj["inward"] = lt.Inward
+			obj["outward"] = lt.Outward
+			return obj
+		}
+	}
+	return obj
 }
 
 func namedArr(in []model.Named) []any {

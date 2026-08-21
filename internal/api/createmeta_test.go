@@ -102,7 +102,7 @@ func TestCreateMetaFieldsShape(t *testing.T) {
 			t.Errorf("%s hasDefaultValue=%v want %v", id, got, wantDefault[id])
 		}
 	}
-	optional := []string{"description", "labels", "assignee", "duedate", "parent"}
+	optional := []string{"description", "labels", "assignee", "duedate", "parent", "fixVersions", "components"}
 	for _, id := range optional {
 		f, ok := byID[id]
 		if !ok {

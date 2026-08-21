@@ -3,6 +3,7 @@ package store
 import (
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -29,7 +30,7 @@ type editFieldSpec struct {
 	operations []string
 	typ        string
 	items      string
-	allowed    string // priority | issuetype | ""
+	allowed    string // priority | issuetype | fixVersions | components | ""
 }
 
 func systemEditSpecs() []editFieldSpec {
@@ -42,6 +43,8 @@ func systemEditSpecs() []editFieldSpec {
 		{id: "duedate", operations: []string{"set"}, typ: "date"},
 		{id: "parent", operations: []string{"set"}, typ: "issuelink"},
 		{id: "issuetype", operations: []string{"set"}, typ: "issuetype", allowed: "issuetype"},
+		{id: "fixVersions", operations: []string{"add", "set", "remove"}, typ: "array", items: "version", allowed: "fixVersions"},
+		{id: "components", operations: []string{"add", "set", "remove"}, typ: "array", items: "component", allowed: "components"},
 	}
 }
 
@@ -52,7 +55,7 @@ type createFieldSpec struct {
 	operations []string
 	typ        string
 	items      string
-	allowed    string // priority | issuetype | ""
+	allowed    string // priority | issuetype | fixVersions | components | ""
 }
 
 // systemCreateSpecs is what CreateIssue actually requires and fills.
@@ -69,6 +72,8 @@ func systemCreateSpecs() []createFieldSpec {
 		{id: "assignee", operations: []string{"set"}, typ: "user"},
 		{id: "duedate", operations: []string{"set"}, typ: "date"},
 		{id: "parent", operations: []string{"set"}, typ: "issuelink"},
+		{id: "fixVersions", operations: []string{"add", "set", "remove"}, typ: "array", items: "version", allowed: "fixVersions"},
+		{id: "components", operations: []string{"add", "set", "remove"}, typ: "array", items: "component", allowed: "components"},
 	}
 }
 
@@ -97,22 +102,38 @@ func (s *Store) issueTypeAllowedValues() []any {
 	return av
 }
 
-func (s *Store) attachAllowed(meta map[string]any, allowed string) {
+func (s *Store) attachAllowed(meta map[string]any, allowed, project string) {
 	switch allowed {
 	case "priority":
 		meta["allowedValues"] = s.priorityAllowedValues()
 	case "issuetype":
 		meta["allowedValues"] = s.issueTypeAllowedValues()
+	case "fixVersions", "components":
+		meta["allowedValues"] = s.namedAllowedValues(project, allowed)
 	}
+}
+
+func (s *Store) namedAllowedValues(project, field string) []any {
+	s.mu.RLock()
+	cat := s.projectNamedCatalogLocked(project, field)
+	s.mu.RUnlock()
+	sort.Slice(cat, func(i, j int) bool { return cat[i].ID < cat[j].ID })
+	av := make([]any, 0, len(cat))
+	for _, n := range cat {
+		av = append(av, map[string]any{"id": n.ID, "name": n.Name})
+	}
+	return av
 }
 
 // EditMeta is the fields object of GET /issue/{key}/editmeta.
 // System fields and registered custom fields share this table; UpdateIssue
 // accepts every id this function advertises.
 func (s *Store) EditMeta(key string) (map[string]any, error) {
-	if s.Issue(key) == nil {
+	iss := s.Issue(key)
+	if iss == nil {
 		return nil, errNotFound("issue", key)
 	}
+	project := iss.ProjectKey
 	out := map[string]any{}
 	for _, spec := range systemEditSpecs() {
 		schema := map[string]any{"type": spec.typ, "system": spec.id}
@@ -124,7 +145,7 @@ func (s *Store) EditMeta(key string) (map[string]any, error) {
 			"operations": append([]string{}, spec.operations...),
 			"schema":     schema,
 		}
-		s.attachAllowed(meta, spec.allowed)
+		s.attachAllowed(meta, spec.allowed, project)
 		out[spec.id] = meta
 	}
 	for _, f := range s.Fields() {
@@ -141,7 +162,8 @@ func (s *Store) EditMeta(key string) (map[string]any, error) {
 // Flags are derived from CreateIssue so advertisement cannot drift from
 // acceptance. Pagination is applied by the HTTP handler.
 func (s *Store) CreateFields(projectIDOrKey, issueTypeID string) ([]map[string]any, error) {
-	if s.projectByIDOrKey(projectIDOrKey) == nil {
+	proj := s.projectByIDOrKey(projectIDOrKey)
+	if proj == nil {
 		return nil, errNotFound("project", projectIDOrKey)
 	}
 	if s.IssueType(issueTypeID) == nil {
@@ -163,7 +185,7 @@ func (s *Store) CreateFields(projectIDOrKey, issueTypeID string) ([]map[string]a
 			"operations":      append([]string{}, spec.operations...),
 			"schema":          schema,
 		}
-		s.attachAllowed(row, spec.allowed)
+		s.attachAllowed(row, spec.allowed, proj.Key)
 		out = append(out, row)
 	}
 	for _, f := range s.Fields() {

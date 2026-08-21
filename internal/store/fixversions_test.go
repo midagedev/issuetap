@@ -312,3 +312,39 @@ func TestUpdateIssueComponentsRemove(t *testing.T) {
 		t.Fatalf("JQL still returned TAP-1 after remove: %v", keys)
 	}
 }
+
+// GDK-581: CreateIssue used to drop fields.fixVersions / fields.components
+// into Custom, so GET overlay looked populated but JQL stayed empty.
+func TestCreateIssueFixVersionsComponentsTypedThenJQL(t *testing.T) {
+	st := loadTiny(t)
+	v := tap1Named(t, st, "fixVersions")
+	c := tap1Named(t, st, "components")
+	iss, err := st.CreateIssue(map[string]any{
+		"project":     map[string]any{"key": "TAP"},
+		"summary":     "create named lists",
+		"issuetype":   map[string]any{"id": "10003"},
+		"fixVersions": []any{map[string]any{"id": v.ID}},
+		"components":  []any{map[string]any{"name": c.Name}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, inCustom := iss.Custom["fixVersions"]; inCustom {
+		t.Fatalf("fixVersions stored in Custom (%v)", iss.Custom["fixVersions"])
+	}
+	if _, inCustom := iss.Custom["components"]; inCustom {
+		t.Fatalf("components stored in Custom (%v)", iss.Custom["components"])
+	}
+	if len(iss.FixVersions) != 1 || iss.FixVersions[0].ID != v.ID || iss.FixVersions[0].Name != v.Name {
+		t.Fatalf("FixVersions=%+v, want [{ID:%s Name:%s}]", iss.FixVersions, v.ID, v.Name)
+	}
+	if len(iss.Components) != 1 || iss.Components[0].ID != c.ID || iss.Components[0].Name != c.Name {
+		t.Fatalf("Components=%+v, want [{ID:%s Name:%s}]", iss.Components, c.ID, c.Name)
+	}
+	if !hasKey(searchKeys(t, st, `fixVersion = "`+v.Name+`"`), iss.Key) {
+		t.Fatalf("JQL fixVersion missed created issue %s", iss.Key)
+	}
+	if !hasKey(searchKeys(t, st, `component = "`+c.Name+`"`), iss.Key) {
+		t.Fatalf("JQL component missed created issue %s", iss.Key)
+	}
+}

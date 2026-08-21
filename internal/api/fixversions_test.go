@@ -213,3 +213,90 @@ func TestPutUnknownSystemKeyStillCustom(t *testing.T) {
 		t.Fatalf("GET versions=%s, want Custom overlay of the write", raw)
 	}
 }
+
+// GDK-581: POST /issue with fixVersions/components must advertise those
+// fields on editmeta/createmeta and make JQL hit the created issue.
+func TestCreateFixVersionsComponentsAdvertisedAndJQL(t *testing.T) {
+	ts := testServer(t, locale.EN, dialect.Cloud)
+	defer ts.Close()
+	vid, vname := namedFromIssue(t, ts, "TAP-1", "fixVersions")
+	cid, cname := namedFromIssue(t, ts, "TAP-1", "components")
+
+	createFields := decode(t, authGet(t, ts, "/rest/api/3/issue/createmeta/TAP/issuetypes/10003"))
+	list, _ := createFields["fields"].([]any)
+	seen := map[string]map[string]any{}
+	for _, raw := range list {
+		m, _ := raw.(map[string]any)
+		id, _ := m["fieldId"].(string)
+		seen[id] = m
+	}
+	for _, id := range []string{"fixVersions", "components"} {
+		meta, ok := seen[id]
+		if !ok {
+			t.Fatalf("createmeta missing %s; ids=%v", id, fieldIDs(seen))
+		}
+		av, _ := meta["allowedValues"].([]any)
+		if len(av) == 0 {
+			t.Fatalf("createmeta %s.allowedValues empty: %v", id, meta)
+		}
+	}
+
+	res := authPost(t, ts, "/rest/api/3/issue", map[string]any{
+		"fields": map[string]any{
+			"project":     map[string]any{"key": "TAP"},
+			"summary":     "created with named lists",
+			"issuetype":   map[string]any{"id": "10003"},
+			"fixVersions": []any{map[string]any{"id": vid}},
+			"components":  []any{map[string]any{"name": cname}},
+		},
+	})
+	if res.StatusCode != http.StatusCreated {
+		body, _ := io.ReadAll(res.Body)
+		res.Body.Close()
+		t.Fatalf("POST create status %d body=%s", res.StatusCode, body)
+	}
+	created := decode(t, res)
+	key, _ := created["key"].(string)
+	if key == "" {
+		t.Fatalf("POST create missing key: %v", created)
+	}
+
+	edit := editMetaFields(t, ts, key)
+	for _, id := range []string{"fixVersions", "components"} {
+		raw, ok := edit[id]
+		if !ok {
+			t.Fatalf("editmeta missing %s", id)
+		}
+		meta, _ := raw.(map[string]any)
+		av, _ := meta["allowedValues"].([]any)
+		if len(av) == 0 {
+			t.Fatalf("editmeta %s.allowedValues empty: %v", id, meta)
+		}
+	}
+
+	got := decode(t, authGet(t, ts, "/rest/api/3/issue/"+key+"?fields=fixVersions,components"))
+	fields, _ := got["fields"].(map[string]any)
+	fv, _ := fields["fixVersions"].([]any)
+	if len(fv) != 1 {
+		t.Fatalf("GET fixVersions=%v", fields["fixVersions"])
+	}
+	row, _ := fv[0].(map[string]any)
+	if row["id"] != vid || row["name"] != vname {
+		t.Fatalf("GET fixVersions[0]=%v want id=%s name=%s", row, vid, vname)
+	}
+	comp, _ := fields["components"].([]any)
+	if len(comp) != 1 {
+		t.Fatalf("GET components=%v", fields["components"])
+	}
+	crow, _ := comp[0].(map[string]any)
+	if crow["id"] != cid || crow["name"] != cname {
+		t.Fatalf("GET components[0]=%v want id=%s name=%s", crow, cid, cname)
+	}
+
+	if !hasIssueKey(jqlKeys(t, ts, `fixVersion = "`+vname+`"`), key) {
+		t.Fatalf("JQL fixVersion missed created %s", key)
+	}
+	if !hasIssueKey(jqlKeys(t, ts, `component = "`+cname+`"`), key) {
+		t.Fatalf("JQL component missed created %s", key)
+	}
+}

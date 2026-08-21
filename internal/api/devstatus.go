@@ -33,7 +33,7 @@ func (s *Server) handleDevStatus(w http.ResponseWriter, r *http.Request, path st
 	case r.Method == http.MethodPost && rest == "issue/link":
 		s.postDevLink(w, r)
 	default:
-		writeJiraError(w, http.StatusNotFound, "Unknown dev-status resource")
+		writeUnsupported(w, r.Method, r.URL.Path)
 	}
 }
 

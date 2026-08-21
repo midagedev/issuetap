@@ -146,6 +146,41 @@ func TestIssueLinkTypeCatalog(t *testing.T) {
 	}
 }
 
+func TestGetIssueLinksTypeHasCatalogIDInwardOutward(t *testing.T) {
+	ts := testServer(t, locale.EN, dialect.Cloud)
+	defer ts.Close()
+
+	res := postIssueLink(t, ts, issueLinkPayload("10000", "", "TAP-1", "TAP-3"))
+	if res.StatusCode != http.StatusCreated {
+		status, msgs := jiraErrorMessages(t, res)
+		t.Fatalf("POST issueLink status %d, want 201; errorMessages=%s", status, msgs)
+	}
+	io.Copy(io.Discard, res.Body)
+	res.Body.Close()
+
+	links := issueLinksOf(t, ts, "TAP-1")
+	var typ map[string]any
+	for _, l := range links {
+		tmap, _ := l["type"].(map[string]any)
+		if fmt.Sprint(tmap["name"]) == "Blocks" {
+			typ = tmap
+			break
+		}
+	}
+	if typ == nil {
+		t.Fatalf("TAP-1 missing Blocks link: %v", links)
+	}
+	if fmt.Sprint(typ["id"]) != "10000" {
+		t.Fatalf("type.id=%v, want 10000", typ["id"])
+	}
+	if fmt.Sprint(typ["inward"]) != "is blocked by" {
+		t.Fatalf("type.inward=%v, want is blocked by", typ["inward"])
+	}
+	if fmt.Sprint(typ["outward"]) != "blocks" {
+		t.Fatalf("type.outward=%v, want blocks", typ["outward"])
+	}
+}
+
 func TestPostIssueLinkStoresBothSides(t *testing.T) {
 	ts := testServer(t, locale.EN, dialect.Cloud)
 	defer ts.Close()

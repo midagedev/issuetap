@@ -433,8 +433,9 @@ func (s *Store) Seed() int64 {
 	return s.seed
 }
 
-// Apply replaces the graph with a fixture. Catalog defaults remain and are
-// overwritten by fixture rows of the same id.
+// Apply upserts a fixture into the graph. Fixture rows overwrite existing
+// entries of the same id/key; catalog defaults remain when the fixture
+// omits them. Issue/project/user maps are not wiped first.
 func (s *Store) Apply(doc fixtures.Doc) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -2892,10 +2893,25 @@ func (s *Store) CreateIssue(fields map[string]any) (*model.Issue, error) {
 			return nil, err
 		}
 	}
+	if v, ok := fields["fixVersions"]; ok {
+		named, err := s.resolveNamedListLocked(project, "fixVersions", v)
+		if err != nil {
+			return nil, err
+		}
+		iss.FixVersions = named
+	}
+	if v, ok := fields["components"]; ok {
+		named, err := s.resolveNamedListLocked(project, "components", v)
+		if err != nil {
+			return nil, err
+		}
+		iss.Components = named
+	}
 	known := map[string]bool{
 		"project": true, "summary": true, "issuetype": true, "priority": true,
 		"assignee": true, "reporter": true, "labels": true, "parent": true,
 		"description": true, "duedate": true,
+		"fixVersions": true, "components": true,
 	}
 	for k, v := range fields {
 		if known[k] {

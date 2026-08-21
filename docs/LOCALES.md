@@ -31,6 +31,30 @@ keys on `"High"` fails here even when a particular real site would not.
 That is the product: make the trap fail loudly. `examples/fixtures/korean.yaml`
 uses Korean priority names for the same reason.
 
+## Two roles, one catalog (gadak GDK-597)
+
+The priority deviation above belongs to the **serve role**: `issuetap
+serve --locale ko` is a name-trap harness, and a trap that spares
+priorities would stop failing loudly. The **embedded role** (the public
+`issuetap.NewEmbedded` surface) is not a harness — a standalone workspace
+is someone's real tracker, and a real tracker serves what the site serves.
+The live ko_KR site kept priority names English, so the embedded role does
+too:
+
+| | status / type / field names | priority names |
+| --- | --- | --- |
+| `serve --locale ko` | Korean | Korean (the trap) |
+| `NewEmbedded` + locale ko | Korean | **English** (Cloud fidelity) |
+
+The split has one owner: `store.Options.PriorityNamesEnglish` →
+`Store.prioLoc`, which every priority overlay call site reads
+(`Store.Priorities`, `Store.Priority`, the JQL `Lookup`). `EmbeddedConfig`
+defaults to fidelity — an embedder opts back into the trap with
+`PriorityLocaleTrap: true`. `Embedded.SetLocale` changes the overlay
+locale of a live store (a config change must not drop the persist lock);
+the priority role is fixed at open. Same axis as `WallClock` (GDK-369):
+the embedded role gets the real-tracker behavior, not the demo one.
+
 `--type Task` against a Korean site fails because the type is called `작업`.
 Key on `issue_type_id` or `issuetype = 10003`.
 

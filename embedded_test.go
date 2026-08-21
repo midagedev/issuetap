@@ -163,3 +163,117 @@ func TestEmbeddedHealthz(t *testing.T) {
 		t.Fatalf("healthz: %d: %s", rec.Code, rec.Body)
 	}
 }
+
+// namesOf decodes a JSON array of catalog rows into id→name.
+func namesOf(t *testing.T, body []byte) map[string]string {
+	t.Helper()
+	var arr []map[string]any
+	if err := json.Unmarshal(body, &arr); err != nil {
+		t.Fatalf("bad catalog JSON: %v: %s", err, body)
+	}
+	out := map[string]string{}
+	for _, m := range arr {
+		out[m["id"].(string)] = m["name"].(string)
+	}
+	return out
+}
+
+// TestEmbeddedLocaleCloudFidelity (gadak GDK-597): the embedded role is a
+// real tracker, so a ko workspace serves what the live ko_KR site served —
+// Korean status and issue-type names, English priority names. The serve
+// role's priority trap (localized priorities) stays available to an
+// embedder via PriorityLocaleTrap.
+func TestEmbeddedLocaleCloudFidelity(t *testing.T) {
+	e, err := issuetap.NewEmbedded(issuetap.EmbeddedConfig{Locale: "ko"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer e.Close()
+
+	code, body := authReq(t, e, http.MethodGet, "/rest/api/3/status", nil, "")
+	if code != http.StatusOK {
+		t.Fatalf("GET /status: %d: %s", code, body)
+	}
+	if got := namesOf(t, body)["3"]; got != "진행 중" {
+		t.Fatalf("ko status 3 = %q — status names must localize", got)
+	}
+
+	code, body = authReq(t, e, http.MethodGet, "/rest/api/3/priority", nil, "")
+	if code != http.StatusOK {
+		t.Fatalf("GET /priority: %d: %s", code, body)
+	}
+	prios := namesOf(t, body)
+	if got := prios["2"]; got != "High" {
+		t.Fatalf("ko priority 2 = %q — Cloud fidelity keeps priority names English", got)
+	}
+
+	// The trap opt-in restores the serve behavior.
+	trap, err := issuetap.NewEmbedded(issuetap.EmbeddedConfig{Locale: "ko", PriorityLocaleTrap: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer trap.Close()
+	code, body = authReq(t, trap, http.MethodGet, "/rest/api/3/priority", nil, "")
+	if code != http.StatusOK {
+		t.Fatalf("GET /priority (trap): %d: %s", code, body)
+	}
+	if got := namesOf(t, body)["2"]; got != "높음" {
+		t.Fatalf("trap priority 2 = %q — the serve trap must stay reachable", got)
+	}
+}
+
+// TestEmbeddedSetLocaleRuntime (gadak GDK-597): a config change reaches a
+// live embedded store without dropping the persist lock — the gadak-serve
+// path. Status names follow; priority names stay English (the role is
+// fixed at open).
+func TestEmbeddedSetLocaleRuntime(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state.yaml")
+	e, err := issuetap.NewEmbedded(issuetap.EmbeddedConfig{PersistPath: path})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer e.Close()
+
+	code, body := authReq(t, e, http.MethodGet, "/rest/api/3/status", nil, "")
+	if code != http.StatusOK {
+		t.Fatalf("GET /status: %d: %s", code, body)
+	}
+	if got := namesOf(t, body)["3"]; got != "In Progress" {
+		t.Fatalf("en status 3 = %q", got)
+	}
+
+	if err := e.SetLocale("ko"); err != nil {
+		t.Fatal(err)
+	}
+	code, body = authReq(t, e, http.MethodGet, "/rest/api/3/status", nil, "")
+	if code != http.StatusOK {
+		t.Fatalf("GET /status after SetLocale: %d: %s", code, body)
+	}
+	if got := namesOf(t, body)["3"]; got != "진행 중" {
+		t.Fatalf("status 3 after SetLocale(ko) = %q", got)
+	}
+	code, body = authReq(t, e, http.MethodGet, "/rest/api/3/priority", nil, "")
+	if code != http.StatusOK {
+		t.Fatalf("GET /priority after SetLocale: %d: %s", code, body)
+	}
+	if got := namesOf(t, body)["2"]; got != "High" {
+		t.Fatalf("priority 2 after SetLocale(ko) = %q — role must not follow the runtime locale", got)
+	}
+
+	// The locale change persists like any other mutation.
+	if err := e.Close(); err != nil {
+		t.Fatal(err)
+	}
+	e2, err := issuetap.NewEmbedded(issuetap.EmbeddedConfig{PersistPath: path})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer e2.Close()
+	code, body = authReq(t, e2, http.MethodGet, "/rest/api/3/status", nil, "")
+	if code != http.StatusOK {
+		t.Fatalf("GET /status after restart: %d: %s", code, body)
+	}
+	if got := namesOf(t, body)["3"]; got != "진행 중" {
+		t.Fatalf("status 3 after restart = %q — SetLocale must persist", got)
+	}
+}

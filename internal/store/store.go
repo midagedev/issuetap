@@ -38,6 +38,11 @@ type Store struct {
 	loc       locale.Code
 	tz        *time.Location
 
+	// prioNamesEnglish is the embedded-role flag: a standalone workspace
+	// is a real tracker, so priority names stay English under every
+	// locale — what a live Cloud site does (gadak GDK-597).
+	prioNamesEnglish bool
+
 	seqIssue   int
 	seqComment int
 	seqHist    int
@@ -84,6 +89,13 @@ type Options struct {
 	// instead of the deterministic seed clock — for a standalone workspace
 	// that is a real tracker, not a fixture-driven demo (gadak GDK-369).
 	WallClock bool
+	// PriorityNamesEnglish pins priority names to the English catalog under
+	// every locale — what a live Cloud site does: the ko_KR site in
+	// docs/LOCALES.md still returned Highest/High/… (gadak GDK-597). For a
+	// standalone workspace that is a real tracker, not a name-trap harness.
+	// Zero keeps the `serve --locale` deviation — localized priority names —
+	// which exists to fail name-keyed clients loudly; see prioLoc.
+	PriorityNamesEnglish bool
 }
 
 // DefaultPersistDebounce is the write-through quiet window.
@@ -119,6 +131,7 @@ func New(opt Options) *Store {
 		clk:               clk,
 		wallClock:         opt.WallClock,
 		loc:               opt.Locale,
+		prioNamesEnglish:  opt.PriorityNamesEnglish,
 		tz:                time.FixedZone("KST", 9*3600),
 		users:             map[string]*model.User{},
 		usersByEmail:      map[string]*model.User{},
@@ -1287,6 +1300,20 @@ func first(ss ...string) string {
 	return ""
 }
 
+// prioLoc is the one owner of the serve-vs-embedded priority-locale split.
+// A standalone workspace is a real tracker, and the live ko_KR site kept
+// priority names English (docs/LOCALES.md) — so the embedded role pins
+// priorities to the EN catalog under every locale. `issuetap serve
+// --locale` keeps translating them; that name trap is the product of the
+// serve role (gadak GDK-597). Callers must hold s.mu (or neither lock —
+// the field is immutable after New).
+func (s *Store) prioLoc() locale.Code {
+	if s.prioNamesEnglish {
+		return locale.EN
+	}
+	return s.loc
+}
+
 // Lookup is the JQL resolver.
 func (s *Store) Lookup() jql.Lookup {
 	return jql.Lookup{
@@ -1306,7 +1333,7 @@ func (s *Store) Lookup() jql.Lookup {
 		},
 		Priority: func(id string) *model.Priority {
 			if p := s.prioByID[id]; p != nil {
-				cp := locale.OverlayPriority(s.loc, *p)
+				cp := locale.OverlayPriority(s.prioLoc(), *p)
 				return &cp
 			}
 			return nil
@@ -1607,7 +1634,7 @@ func (s *Store) Priorities() []model.Priority {
 	defer s.mu.RUnlock()
 	out := make([]model.Priority, 0, len(s.priorities))
 	for _, p := range s.priorities {
-		out = append(out, locale.OverlayPriority(s.loc, *p))
+		out = append(out, locale.OverlayPriority(s.prioLoc(), *p))
 	}
 	return out
 }
@@ -1620,7 +1647,7 @@ func (s *Store) Priority(id string) *model.Priority {
 	if p == nil {
 		return nil
 	}
-	cp := locale.OverlayPriority(s.loc, *p)
+	cp := locale.OverlayPriority(s.prioLoc(), *p)
 	return &cp
 }
 

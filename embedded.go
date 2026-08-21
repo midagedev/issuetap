@@ -40,6 +40,12 @@ type EmbeddedConfig struct {
 	PersistPath     string        // write-through state file (see store.Options)
 	PersistDebounce time.Duration // quiet window before a write (0 → 1s)
 	WallClock       bool          // stamp records with wall time, not the seed clock (see store.Options)
+	// PriorityLocaleTrap opts back into the `serve --locale` deviation:
+	// localized priority names. Zero is the embedded role — a real tracker
+	// serving what a live Cloud site serves, where priority names stay
+	// English under every locale (docs/LOCALES.md, gadak GDK-597; see
+	// store.Options.PriorityNamesEnglish).
+	PriorityLocaleTrap bool
 }
 
 // Embedded is issuetap as an in-process dependency: the public embedding
@@ -73,6 +79,9 @@ func NewEmbedded(cfg EmbeddedConfig) (*Embedded, error) {
 		Seed: seed, Locale: loc,
 		PersistPath: cfg.PersistPath, PersistDebounce: cfg.PersistDebounce,
 		WallClock: cfg.WallClock,
+		// The embedded default is Cloud fidelity: only an explicit trap
+		// opt-in restores the serve deviation (gadak GDK-597).
+		PriorityNamesEnglish: !cfg.PriorityLocaleTrap,
 	})
 	if err != nil {
 		return nil, err
@@ -117,6 +126,16 @@ func NewEmbedded(cfg EmbeddedConfig) (*Embedded, error) {
 // httptest server, mux, or listener.
 func (e *Embedded) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	e.h.ServeHTTP(w, r)
+}
+
+// SetLocale changes the overlay locale of a live embedded store — the
+// runtime half of the embedding contract for programs whose workspace
+// language is a setting (gadak GDK-597): a config change must reach the
+// already-opened store without dropping the persist lock. Data ids do not
+// change; the store remains on whatever priority-locale role it was
+// opened with. The locale is persisted like any other mutation.
+func (e *Embedded) SetLocale(loc string) error {
+	return e.st.SetLocale(locale.Parse(loc))
 }
 
 // LoadFixture replaces the graph with a YAML/JSON fixture file.

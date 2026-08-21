@@ -64,3 +64,41 @@ func TestFilterProjectIn(t *testing.T) {
 		t.Fatalf("%v", got)
 	}
 }
+
+func TestFilterFixVersion(t *testing.T) {
+	issues := []*model.Issue{
+		{Key: "TAP-1", ProjectKey: "TAP", FixVersions: []model.Named{{ID: "v1", Name: "2026.8"}}},
+		{Key: "TAP-2", ProjectKey: "TAP"},
+	}
+	q, err := Parse(`fixVersion = "2026.8"`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := Filter(issues, q, Lookup{}, 0, -1)
+	if len(got) != 1 || got[0].Key != "TAP-1" {
+		t.Fatalf("fixVersion by name: %v", got)
+	}
+	q, err = Parse(`fixVersion = v1`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got = Filter(issues, q, Lookup{}, 0, -1)
+	if len(got) != 1 || got[0].Key != "TAP-1" {
+		t.Fatalf("fixVersion by id: %v", got)
+	}
+}
+
+func TestFilterComponent(t *testing.T) {
+	issues := []*model.Issue{
+		{Key: "TAP-1", ProjectKey: "TAP", Components: []model.Named{{ID: "c1", Name: "Core"}}},
+		{Key: "TAP-2", ProjectKey: "TAP"},
+	}
+	q, err := Parse(`component = "Core"`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := Filter(issues, q, Lookup{}, 0, -1)
+	if len(got) != 1 || got[0].Key != "TAP-1" {
+		t.Fatalf("%v", got)
+	}
+}

@@ -2365,6 +2365,8 @@ func (s *Store) UpdateFields(key string, fields map[string]any) error {
 // UpdateIssue applies Jira Cloud PUT /issue {fields, update}.
 // update is processed first, then fields (Cloud order). Unsupported
 // update fields return an error instead of a silent no-op.
+// fixVersions and components are first-class typed arrays (not Custom);
+// fields replaces the whole list, update accepts add/remove/set.
 func (s *Store) UpdateIssue(key string, fields, update map[string]any) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -2372,7 +2374,7 @@ func (s *Store) UpdateIssue(key string, fields, update map[string]any) error {
 	if iss == nil {
 		return errNotFound("issue", key)
 	}
-	if err := applyUpdateOps(iss, update); err != nil {
+	if err := s.applyUpdateOps(iss, update); err != nil {
 		return err
 	}
 	var parentKey *string
@@ -2411,6 +2413,20 @@ func (s *Store) UpdateIssue(key string, fields, update map[string]any) error {
 			}
 		case "assignee":
 			iss.AssigneeID = pickID(v)
+		case "fixVersions":
+			named, err := s.resolveNamedListLocked(iss.ProjectKey, "fixVersions", v)
+			if err != nil {
+				return err
+			}
+			iss.FixVersions = named
+			delete(iss.Custom, "fixVersions")
+		case "components":
+			named, err := s.resolveNamedListLocked(iss.ProjectKey, "components", v)
+			if err != nil {
+				return err
+			}
+			iss.Components = named
+			delete(iss.Custom, "components")
 		default:
 			if err := s.validateCustomWriteLocked(k, v); err != nil {
 				return err
@@ -2425,7 +2441,7 @@ func (s *Store) UpdateIssue(key string, fields, update map[string]any) error {
 	return s.markDirtyLocked()
 }
 
-func applyUpdateOps(iss *model.Issue, update map[string]any) error {
+func (s *Store) applyUpdateOps(iss *model.Issue, update map[string]any) error {
 	if len(update) == 0 {
 		return nil
 	}
@@ -2439,6 +2455,20 @@ func applyUpdateOps(iss *model.Issue, update map[string]any) error {
 			if err := applyLabelOps(iss, ops); err != nil {
 				return err
 			}
+		case "fixVersions":
+			next, err := s.applyNamedOpsLocked(iss.ProjectKey, "fixVersions", iss.FixVersions, ops)
+			if err != nil {
+				return err
+			}
+			iss.FixVersions = next
+			delete(iss.Custom, "fixVersions")
+		case "components":
+			next, err := s.applyNamedOpsLocked(iss.ProjectKey, "components", iss.Components, ops)
+			if err != nil {
+				return err
+			}
+			iss.Components = next
+			delete(iss.Custom, "components")
 		default:
 			return fmt.Errorf("unsupported update field: %s", field)
 		}
@@ -2507,6 +2537,192 @@ func removeLabel(in []string, want string) []string {
 		}
 	}
 	return out
+}
+
+// Version and component identity is the union of {id,name} already on
+// issues in the project. fixtures.Project has no versions/components list
+// (GET /project/{key}/versions is 501), so the issue-typed arrays are the
+// catalog. A project with no such rows yet accepts a name as-is so a
+// minimal fixture still round-trips; a present catalog rejects unknown
+// id/name — Cloud does not create versions on issue edit.
+func (s *Store) applyNamedOpsLocked(project, field string, current []model.Named, ops []any) ([]model.Named, error) {
+	cur := append([]model.Named{}, current...)
+	for _, raw := range ops {
+		op, ok := raw.(map[string]any)
+		if !ok {
+			return nil, FieldError{Field: field, Msg: "update operation must be an object"}
+		}
+		if v, ok := op["add"]; ok {
+			n, err := s.resolveNamedLocked(project, field, v, cur)
+			if err != nil {
+				return nil, err
+			}
+			if !namedHasID(cur, n.ID) {
+				cur = append(cur, n)
+			}
+			continue
+		}
+		if v, ok := op["remove"]; ok {
+			n, err := s.resolveNamedLocked(project, field, v, cur)
+			if err != nil {
+				return nil, err
+			}
+			cur = namedRemoveID(cur, n.ID)
+			continue
+		}
+		if v, ok := op["set"]; ok {
+			next, err := s.resolveNamedListLocked(project, field, v)
+			if err != nil {
+				return nil, err
+			}
+			cur = next
+			continue
+		}
+		return nil, FieldError{Field: field, Msg: "unsupported operation"}
+	}
+	return cur, nil
+}
+
+func (s *Store) resolveNamedListLocked(project, field string, v any) ([]model.Named, error) {
+	if v == nil {
+		return []model.Named{}, nil
+	}
+	arr, ok := asAnySlice(v)
+	if !ok {
+		return nil, FieldError{Field: field, Msg: "must be an array"}
+	}
+	out := make([]model.Named, 0, len(arr))
+	seen := map[string]bool{}
+	for _, item := range arr {
+		n, err := s.resolveNamedLocked(project, field, item, out)
+		if err != nil {
+			return nil, err
+		}
+		if n.ID != "" && seen[n.ID] {
+			continue
+		}
+		seen[n.ID] = true
+		out = append(out, n)
+	}
+	return out, nil
+}
+
+func (s *Store) resolveNamedLocked(project, field string, item any, extra []model.Named) (model.Named, error) {
+	m, ok := item.(map[string]any)
+	if !ok {
+		return model.Named{}, FieldError{Field: field, Msg: "must be {id} and/or {name}"}
+	}
+	id := scalarID(m["id"])
+	name, _ := m["name"].(string)
+	if id == "" && name == "" {
+		return model.Named{}, FieldError{Field: field, Msg: "must have id or name"}
+	}
+	cat := s.projectNamedCatalogLocked(project, field)
+	lookup := append(append([]model.Named{}, cat...), extra...)
+	if id != "" {
+		for _, n := range lookup {
+			if n.ID == id {
+				return n, nil
+			}
+		}
+		if len(cat) > 0 || name == "" {
+			return model.Named{}, FieldError{Field: field, Msg: "unknown " + field + " id"}
+		}
+		return model.Named{ID: id, Name: name}, nil
+	}
+	for _, n := range lookup {
+		if n.Name == name {
+			return n, nil
+		}
+	}
+	if len(cat) == 0 {
+		return model.Named{ID: slugID(name), Name: name}, nil
+	}
+	return model.Named{}, FieldError{Field: field, Msg: "unknown " + field}
+}
+
+func (s *Store) projectNamedCatalogLocked(project, field string) []model.Named {
+	seen := map[string]model.Named{}
+	for _, iss := range s.issues {
+		if project != "" && iss.ProjectKey != project {
+			continue
+		}
+		var list []model.Named
+		switch field {
+		case "fixVersions":
+			list = iss.FixVersions
+		case "components":
+			list = iss.Components
+		}
+		for _, n := range list {
+			if n.ID == "" {
+				continue
+			}
+			if _, ok := seen[n.ID]; !ok {
+				seen[n.ID] = n
+			}
+		}
+	}
+	out := make([]model.Named, 0, len(seen))
+	for _, n := range seen {
+		out = append(out, n)
+	}
+	return out
+}
+
+func namedHasID(in []model.Named, id string) bool {
+	for _, n := range in {
+		if n.ID == id {
+			return true
+		}
+	}
+	return false
+}
+
+func namedRemoveID(in []model.Named, id string) []model.Named {
+	if len(in) == 0 {
+		return in
+	}
+	out := in[:0]
+	for _, n := range in {
+		if n.ID != id {
+			out = append(out, n)
+		}
+	}
+	return out
+}
+
+func asAnySlice(v any) ([]any, bool) {
+	switch t := v.(type) {
+	case []any:
+		return t, true
+	case []map[string]any:
+		out := make([]any, len(t))
+		for i := range t {
+			out[i] = t[i]
+		}
+		return out, true
+	}
+	return nil, false
+}
+
+func scalarID(v any) string {
+	switch t := v.(type) {
+	case string:
+		return t
+	case json.Number:
+		return t.String()
+	case float64:
+		if t == float64(int64(t)) {
+			return strconv.FormatInt(int64(t), 10)
+		}
+		return strconv.FormatFloat(t, 'f', -1, 64)
+	case int:
+		return strconv.Itoa(t)
+	case int64:
+		return strconv.FormatInt(t, 10)
+	}
+	return ""
 }
 
 func (s *Store) setDesc(iss *model.Issue, v any) {

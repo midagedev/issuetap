@@ -6,6 +6,7 @@
 //	key = KEY | key in (...)
 //	updated/created >= / > / <= / < timestamp
 //	status / statusCategory / issuetype / type / priority / assignee / reporter
+//	fixVersion / component (typed arrays on the issue)
 //	AND / OR / parentheses
 //	ORDER BY updated|created|key ASC|DESC
 //
@@ -53,11 +54,11 @@ type evalCtx struct {
 // Lookup is what the store supplies so JQL can resolve ids to names
 // (and the other way) without importing the store package.
 type Lookup struct {
-	Status     func(id string) *model.Status
-	IssueType  func(id string) *model.IssueType
-	Priority   func(id string) *model.Priority
-	User       func(id string) *model.User
-	Location   *time.Location
+	Status    func(id string) *model.Status
+	IssueType func(id string) *model.IssueType
+	Priority  func(id string) *model.Priority
+	User      func(id string) *model.User
+	Location  *time.Location
 }
 
 type cmpOp string
@@ -165,8 +166,25 @@ func (p pred) values(ctx evalCtx, iss *model.Issue) []string {
 		return []string{iss.Summary}
 	case "labels":
 		return append([]string{}, iss.Labels...)
+	case "fixversion", "fixversions":
+		return namedVals(iss.FixVersions)
+	case "component", "components":
+		return namedVals(iss.Components)
 	}
 	return nil
+}
+
+func namedVals(in []model.Named) []string {
+	out := make([]string, 0, len(in)*2)
+	for _, n := range in {
+		if n.ID != "" {
+			out = append(out, n.ID)
+		}
+		if n.Name != "" {
+			out = append(out, n.Name, strings.ToLower(n.Name))
+		}
+	}
+	return out
 }
 
 func userVals(ctx evalCtx, id string) []string {

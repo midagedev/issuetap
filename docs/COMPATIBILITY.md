@@ -69,7 +69,7 @@ Jira layout `2006-01-02T15:04:05.000-0700`.
 | Edit meta | `GET /issue/{key}/editmeta` | Partial | summary, description, labels, priority (+allowedValues), assignee, duedate, parent, issuetype (+allowedValues), plus fixture custom fields (kind schema; option kinds include allowedValues). Not per-screen field config. |
 | Create meta | `GET /issue/createmeta` | Partial | projects + types. |
 | Create meta fields | `GET /issue/createmeta/{projectIdOrKey}/issuetypes/{id}` | Partial | fields list + startAt/maxResults/total. required/hasDefaultValue derived from CreateIssue (project, summary, issuetype, reporter required; issuetype/reporter/priority have defaults). Not per-screen field config. |
-| Writes | `POST /issue`, `PUT /issue/{key}`, `POST …/comment`, `PUT …/assignee`, `POST …/attachments` | Supported | Mutate the in-memory graph. Parent, when set, must exist and be exactly one `hierarchyLevel` above the child (type id, not name). Create 400: `errors.parent` and `errors.parentId`. Edit 400: `errors.pid`. POST comment stores `visibility` (`type` must be role or group, `value` non-empty; no role/group existence check) and maps `properties` `sd.public.comment` `internal` to `jsdPublic` (`!internal`). Invalid `visibility.type` is HTTP 400 `errors.visibility`. |
+| Writes | `POST /issue`, `PUT /issue/{key}`, `POST …/comment`, `PUT …/assignee`, `POST …/attachments` | Supported | Mutate the in-memory graph. Parent, when set, must exist and be exactly one `hierarchyLevel` above the child (type id, not name). Create 400: `errors.parent` and `errors.parentId`. Edit 400: `errors.pid`. PUT `fields.fixVersions` / `fields.components` is a full replace; `update.fixVersions` / `update.components` accepts `add`/`remove`/`set` with `{id}` or `{name}`. Identity is the project's issue-derived catalog (fixtures have no project version/component list). Unknown id/name is HTTP 400 `errors.fixVersions` / `errors.components`. Stored on the typed arrays, not `Custom`. A project with an empty catalog accepts a name as-is. POST comment stores `visibility` (`type` must be role or group, `value` non-empty; no role/group existence check) and maps `properties` `sd.public.comment` `internal` to `jsdPublic` (`!internal`). Invalid `visibility.type` is HTTP 400 `errors.visibility`. |
 | Attachments | `GET /attachment/{id}`, `GET /attachment/content/{id}` | Supported | 302 to `/file/{uuid}/binary?name=`; the target serves the stored bytes. |
 | Spaces | `GET /wiki/rest/api/space`, `GET /wiki/rest/api/space/{key}` | Supported | |
 | CQL | `GET /wiki/rest/api/content/search` | Supported | `space`, `type`, `lastModified`; `_links.next`. |
@@ -80,6 +80,7 @@ Jira layout `2006-01-02T15:04:05.000-0700`.
 
 JQL subset: `project`, `key`, `updated`, `created`, `status`,
 `statusCategory`, `issuetype`/`type`, `priority`, `assignee`, `reporter`,
+`fixVersion`, `component`,
 `AND`/`OR`/`NOT`, `IN`, `ORDER BY`. Unparseable JQL is HTTP 400 — the
 server does not silently return every issue.
 

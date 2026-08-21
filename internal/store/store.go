@@ -1113,12 +1113,14 @@ func (s *Store) userOrDefault(ref string) *model.User {
 }
 
 // EnsureActor returns the user an X-Issuetap-Actor slug names, creating it
-// when unknown (gadak GDK-588): the slug is the accountId itself, the
-// display name falls back to the slug, and the account type is "agent" so
-// agent-authored records render as agent accounts. Lookup is the users-map
-// key only (accountId or DC username alias) — display names are never
-// matched, and creation only happens when the key is free, so one agent
-// cannot silently become another user and no alias is clobbered.
+// when unknown (gadak GDK-588): the slug is the accountId itself, and the
+// account type is "agent" so agent-authored records render as agent
+// accounts. The display name is the X-Issuetap-Actor-Name verbatim; a
+// nameless slug gets a deterministic friendly alias (GDK-593,
+// actorAliasLocked). Lookup is the users-map key only (accountId or DC
+// username alias) — display names are never matched, and creation only
+// happens when the key is free, so one agent cannot silently become
+// another user and no alias is clobbered.
 func (s *Store) EnsureActor(slug, name string) *model.User {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -1127,7 +1129,7 @@ func (s *Store) EnsureActor(slug, name string) *model.User {
 		return &cp
 	}
 	if name == "" {
-		name = slug
+		name = s.actorAliasLocked(slug)
 	}
 	u := s.putUser(fixtures.User{
 		AccountID: slug, DisplayName: name, AccountType: "agent",

@@ -11,7 +11,7 @@ package api_test
 // | Contract | Test |
 // | --- | --- |
 // | actor header wins over the Basic identity | TestActorHeaderStampsCommentAuthor |
-// | X-Issuetap-Actor-Name is the display name; without it the slug is | TestActorNameHeaderIsDisplayName |
+// | X-Issuetap-Actor-Name is the display name; without it a deterministic alias (GDK-593) | TestActorNameHeaderIsDisplayName |
 // | a repeated slug is one stable user (no rename, no duplicate) | TestActorSlugIsStableAcrossRequests |
 // | GET /myself and /user/search?query=me answer the agent | TestActorMyselfAndUserSearchMe |
 // | blank header is ignored; Basic fallback intact | TestActorBlankHeaderFallsBackToBasicIdentity |
@@ -28,6 +28,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -144,8 +145,10 @@ func TestActorHeaderStampsCommentAuthor(t *testing.T) {
 	}
 }
 
-// TestActorNameHeaderIsDisplayName: without X-Issuetap-Actor-Name the slug
-// itself is the display name.
+// TestActorNameHeaderIsDisplayName: X-Issuetap-Actor-Name is the display
+// name. Without it the slug is no longer shown raw — a nameless slug gets
+// the deterministic alias (GDK-593): "Adj Noun" plus the harness label
+// when the prefix is known, stable across requests.
 func TestActorNameHeaderIsDisplayName(t *testing.T) {
 	ts := testServer(t, locale.EN, dialect.Cloud)
 	defer ts.Close()
@@ -153,8 +156,14 @@ func TestActorNameHeaderIsDisplayName(t *testing.T) {
 	if v["accountId"] != "grok:tars" {
 		t.Fatalf("accountId=%v, want the slug", v["accountId"])
 	}
-	if v["displayName"] != "grok:tars" {
-		t.Fatalf("displayName=%v, want the slug when no actor name is sent", v["displayName"])
+	name, _ := v["displayName"].(string)
+	alias := regexp.MustCompile(`^[A-Z][a-z]+ [A-Z][a-z]+( \d+)? \(Grok\)$`)
+	if !alias.MatchString(name) {
+		t.Fatalf("displayName=%q, want a generated \"Adj Noun (Grok)\" alias when no actor name is sent", name)
+	}
+	again := decode(t, actorGet(t, ts, "grok:tars", "", "/rest/api/3/myself"))
+	if again["displayName"] != name {
+		t.Fatalf("repeat request: displayName=%v, want the same alias %q", again["displayName"], name)
 	}
 }
 

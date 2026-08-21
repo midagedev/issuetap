@@ -237,8 +237,10 @@ func TestDevLinkCarriesAuthorBranchActor(t *testing.T) {
 		t.Fatalf("re-POST erased name: %v", row["name"])
 	}
 	actor = row["actor"].(map[string]any)
-	if actor["accountId"] != "grok:tars" || actor["displayName"] != "grok:tars" {
-		t.Fatalf("re-POST actor = %v, want the latest writer grok:tars", actor)
+	// A nameless slug gets a deterministic friendly alias (GDK-593), so the
+	// display name is the alias, not the slug — the identity is the accountId.
+	if actor["accountId"] != "grok:tars" || actor["displayName"] == "grok:tars" || actor["displayName"] == "" {
+		t.Fatalf("re-POST actor = %v, want the latest writer grok:tars with an alias display name", actor)
 	}
 	if row["status"] != "MERGED" {
 		t.Fatalf("re-POST status = %v", row["status"])
@@ -302,8 +304,10 @@ func TestDevLinkAuthorBranchActorSurvivePersistReload(t *testing.T) {
 	if branch := got["source"].(map[string]any)["branch"]; branch != "gdk-589-persist" {
 		t.Fatalf("post-reload source = %v (lost on the persist round trip)", got["source"])
 	}
+	// The stamped display name is the GDK-593 alias; the round trip must
+	// keep it verbatim — accountId is the identity, the alias just rides.
 	actor := got["actor"].(map[string]any)
-	if actor["accountId"] != "claude:354bff2b" || actor["displayName"] != "claude:354bff2b" {
+	if actor["accountId"] != "claude:354bff2b" || actor["displayName"] == "claude:354bff2b" || actor["displayName"] == "" {
 		t.Fatalf("post-reload actor = %v (lost on the persist round trip)", actor)
 	}
 }

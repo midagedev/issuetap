@@ -136,6 +136,10 @@ func (s *Server) handleRoot(w http.ResponseWriter, r *http.Request) {
 		if !s.authorize(w, r) {
 			return
 		}
+		if strings.HasPrefix(path, "/rest/dev-status/") {
+			s.handleDevStatus(w, r, path)
+			return
+		}
 		s.handleAtlassian(w, r, path)
 		return
 	}

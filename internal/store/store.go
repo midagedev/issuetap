@@ -811,6 +811,12 @@ func (s *Store) putIssue(in fixtures.Issue) error {
 	for _, c := range in.Comments {
 		iss.Comments = append(iss.Comments, s.makeComment(c, created))
 	}
+	for _, pr := range in.DevPRs {
+		iss.DevPRs = append(iss.DevPRs, model.DevPR{
+			ID: pr.ID, URL: pr.URL, Name: pr.Name,
+			Status: first(pr.Status, "OPEN"), Updated: first(pr.Updated, created),
+		})
+	}
 	for _, a := range in.Attachments {
 		att, err := s.makeAttach(a, created)
 		if err != nil {
@@ -1314,6 +1320,45 @@ func (s *Store) Issue(keyOrID string) *model.Issue {
 		}
 	}
 	return nil
+}
+
+// LinkDevPR upserts one pull-request link on an issue, keyed by URL (the
+// idempotent key, same rule Linear uses for attachments). Status defaults to
+// OPEN; an existing row's empty fields are kept unless the new call fills
+// them.
+func (s *Store) LinkDevPR(keyOrID string, pr model.DevPR) (model.DevPR, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	iss := s.issues[keyOrID]
+	if iss == nil {
+		for _, cand := range s.issues {
+			if cand.ID == keyOrID {
+				iss = cand
+				break
+			}
+		}
+	}
+	if iss == nil {
+		return model.DevPR{}, errNotFound("issue", keyOrID)
+	}
+	if pr.Status == "" {
+		pr.Status = "OPEN"
+	}
+	pr.Updated = clock.Format(s.clk.Tick())
+	if pr.ID == "" {
+		pr.ID = pr.URL
+	}
+	for i := range iss.DevPRs {
+		if iss.DevPRs[i].URL == pr.URL {
+			if pr.Name == "" {
+				pr.Name = iss.DevPRs[i].Name
+			}
+			iss.DevPRs[i] = pr
+			return pr, s.markDirtyLocked()
+		}
+	}
+	iss.DevPRs = append(iss.DevPRs, pr)
+	return pr, s.markDirtyLocked()
 }
 
 // Projects lists projects ordered by key.
@@ -2976,6 +3021,11 @@ func (s *Store) issueToFix(iss *model.Issue) fixtures.Issue {
 	}
 	for _, l := range iss.Links {
 		out.Links = append(out.Links, fixtures.Link{Type: l.TypeName, Inward: l.InwardKey, Outward: l.OutwardKey})
+	}
+	for _, pr := range iss.DevPRs {
+		out.DevPRs = append(out.DevPRs, fixtures.DevPR{
+			ID: pr.ID, URL: pr.URL, Name: pr.Name, Status: pr.Status, Updated: pr.Updated,
+		})
 	}
 	for _, h := range iss.Histories {
 		fh := fixtures.History{ID: h.ID, At: h.Created, Author: h.Author.AccountID}

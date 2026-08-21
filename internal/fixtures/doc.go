@@ -146,6 +146,17 @@ type Issue struct {
 	Links       []Link         `json:"links,omitempty" yaml:"links,omitempty"`
 	History     []History      `json:"history,omitempty" yaml:"history,omitempty"`
 	Custom      map[string]any `json:"custom,omitempty" yaml:"custom,omitempty"`
+	// DevPRs are development-panel pull-request links (gadak GDK-497).
+	DevPRs      []DevPR        `json:"devPRs,omitempty" yaml:"devPRs,omitempty"`
+}
+
+// DevPR is one linked pull request in a fixture / persisted document.
+type DevPR struct {
+	ID      string `json:"id,omitempty" yaml:"id,omitempty"`
+	URL     string `json:"url" yaml:"url"`
+	Name    string `json:"name,omitempty" yaml:"name,omitempty"`
+	Status  string `json:"status,omitempty" yaml:"status,omitempty"`
+	Updated string `json:"updated,omitempty" yaml:"updated,omitempty"`
 }
 
 type Comment struct {

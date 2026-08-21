@@ -88,6 +88,16 @@ type Project struct {
 	Simplified bool   `json:"simplified,omitempty"`
 }
 
+// DevPR is one linked pull request on an issue, in the vocabulary Jira's
+// dev-status detail uses (status OPEN | MERGED | DECLINED).
+type DevPR struct {
+	ID      string `json:"id"`
+	URL     string `json:"url"`
+	Name    string `json:"name"`
+	Status  string `json:"status"`
+	Updated string `json:"lastUpdate"`
+}
+
 // Visibility is a restricted comment audience. Type is role or group;
 // Value is the role or group name. Absent (nil) means the comment is
 // unrestricted — the HTTP key is omitted, never invented.
@@ -222,6 +232,9 @@ type Issue struct {
 	Updated         string
 	Comments        []Comment
 	Attachments     []Attachment
+	// DevPRs are the development-panel pull-request links (gadak GDK-497).
+	// The origin keeps them; served in Jira's dev-status shape.
+	DevPRs          []DevPR
 	Links           []IssueLink
 	Histories       []History
 	Custom          map[string]any

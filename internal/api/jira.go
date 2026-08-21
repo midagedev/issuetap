@@ -657,6 +657,8 @@ func (s *Server) getTransitions(w http.ResponseWriter, r *http.Request, key stri
 		writeJiraError(w, http.StatusNotFound, "Issue does not exist")
 		return
 	}
+	expand := r.URL.Query().Get("expand")
+	wantFields := strings.Contains(expand, "transitions.fields")
 	ts := s.st.Transitions(key)
 	out := make([]any, 0, len(ts))
 	for _, t := range ts {
@@ -665,7 +667,11 @@ func (s *Server) getTransitions(w http.ResponseWriter, r *http.Request, key stri
 		if st != nil {
 			to = s.statusJSON(*st)
 		}
-		out = append(out, map[string]any{"id": t.ID, "name": t.Name, "to": to})
+		row := map[string]any{"id": t.ID, "name": t.Name, "to": to}
+		if wantFields {
+			row["fields"] = s.st.TransitionScreenFields(t.ToID)
+		}
+		out = append(out, row)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"transitions": out})
 }
@@ -675,14 +681,21 @@ func (s *Server) postTransition(w http.ResponseWriter, r *http.Request, key stri
 		Transition struct {
 			ID string `json:"id"`
 		} `json:"transition"`
+		Fields map[string]any `json:"fields"`
+		Update map[string]any `json:"update"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeJiraError(w, http.StatusBadRequest, "Invalid request body")
 		return
 	}
-	if err := s.st.Transition(key, body.Transition.ID); err != nil {
+	err := s.st.ApplyTransition(key, body.Transition.ID, s.identity(r).AccountID, body.Fields, body.Update)
+	if err != nil {
 		if store.IsNotFound(err) {
 			writeJiraError(w, http.StatusNotFound, err.Error())
+			return
+		}
+		if fe, ok := store.AsFieldError(err); ok {
+			writeJiraFieldErrors(w, fe.Map())
 			return
 		}
 		writeJiraWriteError(w, err)

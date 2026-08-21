@@ -65,7 +65,7 @@ Jira layout `2006-01-02T15:04:05.000-0700`.
 | Comments | `GET /issue/{key}/comment` | Supported | `startAt` / `maxResults` / `total`. |
 | Filters | `GET /filter/my` | Supported | |
 | Users | `GET /user/search` | Supported | `query=me` is the `/myself` identity. |
-| Transitions | `GET/POST /issue/{key}/transitions` | Supported | Synthetic transitions to every other status. |
+| Transitions | `GET/POST /issue/{key}/transitions` | Supported | Synthetic transitions to every other status. GET `?expand=transitions.fields` includes a `fields` object per transition (`{}` when the destination has no screen). POST stores `fields.resolution` by catalog id when the destination screen declares it; a field that is not on that screen is HTTP 400 `errors.<field>`. A required resolution omitted from the body is HTTP 400 `errors.resolution`. Entering done with no resolution (and none required) still fills `10000`. Leaving done clears resolution. `update.comment[].add.body` is stored as a comment. |
 | Edit meta | `GET /issue/{key}/editmeta` | Partial | summary, description, labels, priority (+allowedValues), assignee, duedate, parent, issuetype (+allowedValues), plus fixture custom fields (kind schema; option kinds include allowedValues). Not per-screen field config. |
 | Create meta | `GET /issue/createmeta` | Partial | projects + types. |
 | Create meta fields | `GET /issue/createmeta/{projectIdOrKey}/issuetypes/{id}` | Partial | fields list + startAt/maxResults/total. required/hasDefaultValue derived from CreateIssue (project, summary, issuetype, reporter required; issuetype/reporter/priority have defaults). Not per-screen field config. |

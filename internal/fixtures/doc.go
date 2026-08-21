@@ -28,9 +28,15 @@ type Doc struct {
 	Resolutions []Resolution `json:"resolutions,omitempty" yaml:"resolutions,omitempty"`
 	Fields      []Field      `json:"fields,omitempty" yaml:"fields,omitempty"`
 	Filters     []Filter     `json:"filters,omitempty" yaml:"filters,omitempty"`
-	Issues      []Issue      `json:"issues,omitempty" yaml:"issues,omitempty"`
-	Spaces      []Space      `json:"spaces,omitempty" yaml:"spaces,omitempty"`
-	Pages       []Page       `json:"pages,omitempty" yaml:"pages,omitempty"`
+	// TransitionScreens is optional. Each row names fields shown on the
+	// synthetic transition into Status (a status id, never a localized
+	// name). Omitted entirely — the existing fixtures — means every
+	// transition has an empty screen: GET expand returns "fields": {},
+	// and POST fields are rejected.
+	TransitionScreens []TransitionScreen `json:"transitionScreens,omitempty" yaml:"transitionScreens,omitempty"`
+	Issues            []Issue            `json:"issues,omitempty" yaml:"issues,omitempty"`
+	Spaces            []Space            `json:"spaces,omitempty" yaml:"spaces,omitempty"`
+	Pages             []Page             `json:"pages,omitempty" yaml:"pages,omitempty"`
 }
 
 type User struct {
@@ -96,6 +102,21 @@ type Filter struct {
 	JQL       string `json:"jql" yaml:"jql"`
 	Favourite bool   `json:"favourite,omitempty" yaml:"favourite,omitempty"`
 	Owner     string `json:"owner,omitempty" yaml:"owner,omitempty"`
+}
+
+// TransitionScreen is the field set for transitions whose destination
+// is Status. Status is a catalog id. Fields is keyed by field id
+// (resolution, …); a missing or empty map is an empty Cloud screen.
+type TransitionScreen struct {
+	Status string                           `json:"status" yaml:"status"`
+	Fields map[string]TransitionScreenField `json:"fields,omitempty" yaml:"fields,omitempty"`
+}
+
+// TransitionScreenField is one field on a transition screen.
+// Name, schema.type, and allowedValues are filled from catalogs at
+// expand time so fixtures do not duplicate locale overlays.
+type TransitionScreenField struct {
+	Required bool `json:"required,omitempty" yaml:"required,omitempty"`
 }
 
 type Issue struct {

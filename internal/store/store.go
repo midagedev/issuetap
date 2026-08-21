@@ -56,12 +56,15 @@ type Store struct {
 	resolutions  map[string]*model.Resolution
 	fields       []model.FieldInfo
 	filters      []model.Filter
-	issues       map[string]*model.Issue
-	spaces       map[string]*model.Space
-	pages        map[string]*model.Page
-	pageComments map[string][]model.PageComment // parent content id
-	attachBytes  map[string][]byte
-	persist      *persistState
+	// transitionScreens is dest-status-id → field-id → spec. Empty means
+	// every synthetic transition has an empty Cloud screen.
+	transitionScreens map[string]map[string]fixtures.TransitionScreenField
+	issues            map[string]*model.Issue
+	spaces            map[string]*model.Space
+	pages             map[string]*model.Page
+	pageComments      map[string][]model.PageComment // parent content id
+	attachBytes       map[string][]byte
+	persist           *persistState
 }
 
 // Options seed a store.
@@ -103,22 +106,23 @@ func New(opt Options) *Store {
 		opt.Locale = locale.EN
 	}
 	s := &Store{
-		seed:         opt.Seed,
-		clk:          clock.New(opt.Seed),
-		loc:          opt.Locale,
-		tz:           time.FixedZone("KST", 9*3600),
-		users:        map[string]*model.User{},
-		usersByEmail: map[string]*model.User{},
-		projects:     map[string]*model.Project{},
-		statuses:     map[string]*model.Status{},
-		prioByID:     map[string]*model.Priority{},
-		types:        map[string]*model.IssueType{},
-		resolutions:  map[string]*model.Resolution{},
-		issues:       map[string]*model.Issue{},
-		spaces:       map[string]*model.Space{},
-		pages:        map[string]*model.Page{},
-		pageComments: map[string][]model.PageComment{},
-		attachBytes:  map[string][]byte{},
+		seed:              opt.Seed,
+		clk:               clock.New(opt.Seed),
+		loc:               opt.Locale,
+		tz:                time.FixedZone("KST", 9*3600),
+		users:             map[string]*model.User{},
+		usersByEmail:      map[string]*model.User{},
+		projects:          map[string]*model.Project{},
+		statuses:          map[string]*model.Status{},
+		prioByID:          map[string]*model.Priority{},
+		types:             map[string]*model.IssueType{},
+		resolutions:       map[string]*model.Resolution{},
+		transitionScreens: map[string]map[string]fixtures.TransitionScreenField{},
+		issues:            map[string]*model.Issue{},
+		spaces:            map[string]*model.Space{},
+		pages:             map[string]*model.Page{},
+		pageComments:      map[string][]model.PageComment{},
+		attachBytes:       map[string][]byte{},
 	}
 	if opt.PersistPath != "" {
 		debounce := opt.PersistDebounce
@@ -482,6 +486,17 @@ func (s *Store) Apply(doc fixtures.Doc) error {
 		s.filters = append(s.filters, model.Filter{
 			ID: f.ID, Name: f.Name, JQL: f.JQL, Favourite: f.Favourite, Owner: f.Owner,
 		})
+	}
+	s.transitionScreens = map[string]map[string]fixtures.TransitionScreenField{}
+	for _, sc := range doc.TransitionScreens {
+		if sc.Status == "" {
+			continue
+		}
+		fields := map[string]fixtures.TransitionScreenField{}
+		for k, v := range sc.Fields {
+			fields[k] = v
+		}
+		s.transitionScreens[sc.Status] = fields
 	}
 	for _, p := range doc.Spaces {
 		s.putSpace(p)
@@ -1866,7 +1881,8 @@ func (s *Store) AttachmentByMedia(media string) ([]byte, *model.Attachment) {
 }
 
 // Transitions for an issue: every other status in the catalog. This is a
-// model, not a workflow engine.
+// model, not a workflow engine. Numbering is the same function
+// ApplyTransition uses so GET id and POST id cannot drift.
 func (s *Store) Transitions(key string) []model.Transition {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -1882,67 +1898,247 @@ func (s *Store) Transitions(key string) []model.Transition {
 	if iss == nil {
 		return nil
 	}
-	ids := make([]string, 0, len(s.statuses))
-	for id := range s.statuses {
-		ids = append(ids, id)
-	}
-	sort.Strings(ids)
-	var out []model.Transition
-	n := 1
-	for _, id := range ids {
-		if id == iss.StatusID {
-			continue
-		}
+	ids := s.destinationIDsLocked(iss.StatusID)
+	out := make([]model.Transition, 0, len(ids))
+	for i, id := range ids {
 		st := locale.OverlayStatus(s.loc, *s.statuses[id])
 		out = append(out, model.Transition{
-			ID: strconv.Itoa(n), Name: st.Name, ToID: id,
+			ID: strconv.Itoa(i + 1), Name: st.Name, ToID: id,
 		})
-		n++
 	}
 	return out
 }
 
-// Transition applies a transition id (the synthetic id from Transitions).
+func (s *Store) destinationIDsLocked(fromStatus string) []string {
+	ids := make([]string, 0, len(s.statuses))
+	for id := range s.statuses {
+		if id != fromStatus {
+			ids = append(ids, id)
+		}
+	}
+	sort.Strings(ids)
+	return ids
+}
+
+// TransitionScreenFields is the Cloud `fields` object for the transition
+// into toStatusID. Always a non-nil map: empty screen is {}.
+func (s *Store) TransitionScreenFields(toStatusID string) map[string]any {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.transitionScreenFieldsLocked(toStatusID)
+}
+
+func (s *Store) transitionScreenFieldsLocked(toStatusID string) map[string]any {
+	out := map[string]any{}
+	screen, ok := s.transitionScreens[toStatusID]
+	if !ok {
+		return out
+	}
+	ids := make([]string, 0, len(screen))
+	for id := range screen {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	for _, id := range ids {
+		out[id] = s.transitionFieldMetaLocked(id, screen[id])
+	}
+	return out
+}
+
+func (s *Store) transitionFieldMetaLocked(id string, spec fixtures.TransitionScreenField) map[string]any {
+	name := locale.FieldName(s.loc, id, id)
+	schemaType := "string"
+	if id == "resolution" {
+		schemaType = "resolution"
+	} else if f := s.fieldByIDLocked(id); f != nil && f.Schema.Type != "" {
+		schemaType = f.Schema.Type
+	}
+	meta := map[string]any{
+		"required": spec.Required,
+		"name":     name,
+		"schema":   map[string]any{"type": schemaType},
+	}
+	if id == "resolution" {
+		meta["allowedValues"] = s.resolutionAllowedValuesLocked()
+	}
+	return meta
+}
+
+func (s *Store) resolutionAllowedValuesLocked() []any {
+	ids := make([]string, 0, len(s.resolutions))
+	for id := range s.resolutions {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	out := make([]any, 0, len(ids))
+	for _, id := range ids {
+		r := locale.OverlayResolution(s.loc, *s.resolutions[id])
+		out = append(out, map[string]any{"id": r.ID, "name": r.Name})
+	}
+	return out
+}
+
+// Transition applies a synthetic transition id with no fields or update.
 func (s *Store) Transition(key, transitionID string) error {
+	return s.ApplyTransition(key, transitionID, "", nil, nil)
+}
+
+// ApplyTransition is POST /issue/{key}/transitions. HTTP only copies
+// shape; this method owns screen checks, resolution catalog lookup, and
+// persistence. Resolution is keyed by catalog id, never a localized name.
+func (s *Store) ApplyTransition(key, transitionID, authorID string, fields, update map[string]any) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	iss := s.issues[key]
 	if iss == nil {
 		return errNotFound("issue", key)
 	}
-	// Recompute transitions under the lock.
-	ids := make([]string, 0, len(s.statuses))
-	for id := range s.statuses {
-		if id != iss.StatusID {
-			ids = append(ids, id)
-		}
-	}
-	sort.Strings(ids)
+	ids := s.destinationIDsLocked(iss.StatusID)
 	idx, err := strconv.Atoi(transitionID)
 	if err != nil || idx < 1 || idx > len(ids) {
 		return errNotFound("transition", transitionID)
 	}
 	to := ids[idx-1]
 	from := iss.StatusID
+	screen := s.transitionScreens[to]
+
+	if err := rejectFieldsNotOnScreen(fields, screen); err != nil {
+		return err
+	}
+	if err := requireScreenFields(fields, screen); err != nil {
+		return err
+	}
+	comments, err := parseTransitionComments(update)
+	if err != nil {
+		return err
+	}
+
+	var setResolution *string
+	if raw, ok := fields["resolution"]; ok {
+		id := pickID(raw)
+		if id == "" || s.resolutions[id] == nil {
+			return FieldError{Field: "resolution", Msg: "Specified resolution is not valid."}
+		}
+		setResolution = &id
+	}
+
 	iss.StatusID = to
 	iss.Updated = clock.Format(s.clk.Tick())
-	if s.statuses[to] != nil && s.statuses[to].StatusCategory.Key == "done" && iss.ResolutionID == "" {
-		iss.ResolutionID = "10000"
+	if setResolution != nil {
+		iss.ResolutionID = *setResolution
 	}
 	if s.statuses[to] != nil && s.statuses[to].StatusCategory.Key != "done" {
 		iss.ResolutionID = ""
 	}
+	// Cloud workflows fill a default resolution via a post-function when
+	// entering done if the request (and screen) did not supply one.
+	// Existing fixtures, persist files, and gadak conformance depend on
+	// this remaining 10000. Required screens never reach here empty.
+	if s.statuses[to] != nil && s.statuses[to].StatusCategory.Key == "done" && iss.ResolutionID == "" {
+		iss.ResolutionID = "10000"
+	}
 	s.seqHist++
 	iss.Histories = append(iss.Histories, model.History{
 		ID: "h" + strconv.Itoa(s.seqHist), Created: iss.Updated,
-		Author: *s.userOrDefault(""),
+		Author: *s.userOrDefault(authorID),
 		Items: []model.HistoryItem{{
 			Field: "status", FieldID: "status",
 			From: from, FromString: s.displayFor("status", from),
 			To: to, ToString: s.displayFor("status", to),
 		}},
 	})
+	for _, body := range comments {
+		s.addCommentLocked(iss, authorID, body)
+	}
 	return s.markDirtyLocked()
+}
+
+func rejectFieldsNotOnScreen(fields map[string]any, screen map[string]fixtures.TransitionScreenField) error {
+	if len(fields) == 0 {
+		return nil
+	}
+	var extra []string
+	for field := range fields {
+		if _, ok := screen[field]; !ok {
+			extra = append(extra, field)
+		}
+	}
+	if len(extra) == 0 {
+		return nil
+	}
+	sort.Strings(extra)
+	f := extra[0]
+	return FieldError{
+		Field: f,
+		Msg:   "Field '" + f + "' cannot be set. It is not on the appropriate screen, or unknown.",
+	}
+}
+
+func requireScreenFields(fields map[string]any, screen map[string]fixtures.TransitionScreenField) error {
+	var missing []string
+	for field, spec := range screen {
+		if !spec.Required {
+			continue
+		}
+		if _, ok := fields[field]; !ok {
+			missing = append(missing, field)
+		}
+	}
+	if len(missing) == 0 {
+		return nil
+	}
+	sort.Strings(missing)
+	f := missing[0]
+	msg := f + " is required."
+	if f == "resolution" {
+		msg = "Resolution is required."
+	}
+	return FieldError{Field: f, Msg: msg}
+}
+
+func parseTransitionComments(update map[string]any) ([][]byte, error) {
+	if len(update) == 0 {
+		return nil, nil
+	}
+	var out [][]byte
+	keys := make([]string, 0, len(update))
+	for field := range update {
+		keys = append(keys, field)
+	}
+	sort.Strings(keys)
+	for _, field := range keys {
+		if field != "comment" {
+			return nil, fmt.Errorf("unsupported update field: %s", field)
+		}
+		ops, ok := update[field].([]any)
+		if !ok {
+			return nil, fmt.Errorf("update.comment must be an array of operations")
+		}
+		for _, opRaw := range ops {
+			op, ok := opRaw.(map[string]any)
+			if !ok {
+				return nil, fmt.Errorf("comment update operation must be an object")
+			}
+			add, ok := op["add"]
+			if !ok {
+				return nil, fmt.Errorf("unsupported comment operation")
+			}
+			addObj, ok := add.(map[string]any)
+			if !ok {
+				return nil, fmt.Errorf("comment add must be an object")
+			}
+			body, ok := addObj["body"]
+			if !ok {
+				return nil, fmt.Errorf("comment add needs a body")
+			}
+			b, err := json.Marshal(body)
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, b)
+		}
+	}
+	return out, nil
 }
 
 // AddComment posts a comment. body is ADF or a string.
@@ -1953,6 +2149,11 @@ func (s *Store) AddComment(key, authorID string, body []byte) (model.Comment, er
 	if iss == nil {
 		return model.Comment{}, errNotFound("issue", key)
 	}
+	cm := s.addCommentLocked(iss, authorID, body)
+	return cm, s.markDirtyLocked()
+}
+
+func (s *Store) addCommentLocked(iss *model.Issue, authorID string, body []byte) model.Comment {
 	text := adf.Plain(body)
 	if text == "" && len(body) > 0 && body[0] != '{' {
 		text = string(body)
@@ -1970,7 +2171,7 @@ func (s *Store) AddComment(key, authorID string, body []byte) (model.Comment, er
 	}
 	iss.Comments = append(iss.Comments, cm)
 	iss.Updated = now
-	return cm, s.markDirtyLocked()
+	return cm
 }
 
 // AddPageComment posts a top-level comment on a page (Cloud v1
@@ -2587,6 +2788,21 @@ func (s *Store) snapshotLocked() fixtures.Doc {
 	sort.Slice(d.IssueTypes, func(i, j int) bool { return d.IssueTypes[i].ID < d.IssueTypes[j].ID })
 	d.Fields = fixtureFieldsFromStore(s.fields)
 	sort.Slice(d.Fields, func(i, j int) bool { return d.Fields[i].ID < d.Fields[j].ID })
+	screenIDs := make([]string, 0, len(s.transitionScreens))
+	for id := range s.transitionScreens {
+		screenIDs = append(screenIDs, id)
+	}
+	sort.Strings(screenIDs)
+	for _, id := range screenIDs {
+		src := s.transitionScreens[id]
+		fields := make(map[string]fixtures.TransitionScreenField, len(src))
+		for k, v := range src {
+			fields[k] = v
+		}
+		d.TransitionScreens = append(d.TransitionScreens, fixtures.TransitionScreen{
+			Status: id, Fields: fields,
+		})
+	}
 	keys := make([]string, 0, len(s.issues))
 	for k := range s.issues {
 		keys = append(keys, k)

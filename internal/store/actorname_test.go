@@ -18,6 +18,10 @@ package store
 // | a base name already held by another account gets a numeric discriminator | TestActorAliasConflictGetsNumericSuffix |
 // | the assigned alias persists as an ordinary DisplayName across a persist round trip | TestActorAliasSurvivesPersistRoundTrip |
 // | the dictionaries are 100 lowercase single words, unique per list | TestActorNameDictionaries |
+// | a ko store renders the alias from Korean lists; ja/de fall back to English | TestActorAliasKoreanFormat, TestActorAliasJaDeFallBackToEnglish |
+// | the hash is locale-independent — the same slug picks the same adjective×noun pair in en and ko | TestActorAliasKoreanSharesIndexWithEnglish |
+// | the ko path keeps the conflict, explicit-name, and no-rewrite-after-locale-change contracts | TestActorAliasKoreanConflictGetsNumericSuffix, TestActorAliasKoreanExplicitNameAndLocaleChange |
+// | the Korean dictionaries are 100 single Hangul words, unique per list | TestActorNameDictionariesKO |
 
 import (
 	"path/filepath"
@@ -210,6 +214,175 @@ func TestActorAliasSurvivesPersistRoundTrip(t *testing.T) {
 	}
 }
 
+// koTinyStore is tinyStore switched to the ko overlay after the fixture:
+// tiny.yaml itself carries `locale: en` and Apply folds doc.Locale into the
+// store, so the switch has to come after the fixture — the runtime
+// equivalent of SetLocale on a live store.
+func koTinyStore(t *testing.T) *Store {
+	t.Helper()
+	st := tinyStore(t)
+	if err := st.SetLocale(locale.KO); err != nil {
+		t.Fatal(err)
+	}
+	return st
+}
+
+// koreanAliasPattern is the Korean alias shape: an attributive adjective
+// and an animal noun ("씩씩한 수달"), an optional numeric discriminator, and
+// the same optional " (Harness)" label as the English alias.
+var koreanAliasPattern = regexp.MustCompile(`^[가-힣]+ [가-힣]+( \d+)?( \([A-Za-z0-9 ]+\))?$`)
+
+// TestActorAliasKoreanFormat: in a ko store a nameless slug gets a Hangul
+// "형용사 명사" alias under the same harness-suffix rules as English.
+func TestActorAliasKoreanFormat(t *testing.T) {
+	st := koTinyStore(t)
+	defer st.Close()
+	for _, slug := range []string{"claude:354bff2b", "grok:tars", "zeta:9f3a", "hermes:olymp", "claude:9c2d71e0"} {
+		u := st.EnsureActor(slug, "")
+		t.Logf("%s -> %s", slug, u.DisplayName)
+		if u.DisplayName == slug {
+			t.Fatalf("slug %q: displayName is the raw slug; want a generated alias", slug)
+		}
+		if !koreanAliasPattern.MatchString(u.DisplayName) {
+			t.Fatalf("slug %q: displayName %q does not match 형용사 명사 [n] [(Harness)]", slug, u.DisplayName)
+		}
+	}
+}
+
+// TestActorAliasKoreanDeterministic: two ko stores agree on the alias, and
+// a repeat call neither renames nor duplicates.
+func TestActorAliasKoreanDeterministic(t *testing.T) {
+	a := koTinyStore(t)
+	defer a.Close()
+	b := koTinyStore(t)
+	defer b.Close()
+	for _, slug := range []string{"claude:354bff2b", "grok:tars", "hermes:olymp"} {
+		first := a.EnsureActor(slug, "")
+		second := b.EnsureActor(slug, "")
+		if first.DisplayName != second.DisplayName {
+			t.Fatalf("slug %q: two ko stores assigned %q and %q; want the same alias", slug, first.DisplayName, second.DisplayName)
+		}
+		again := a.EnsureActor(slug, "")
+		if again.DisplayName != first.DisplayName {
+			t.Fatalf("slug %q: repeat call renamed %q to %q", slug, first.DisplayName, again.DisplayName)
+		}
+	}
+}
+
+// TestActorAliasKoreanExplicitNameAndLocaleChange: an explicit
+// X-Issuetap-Actor-Name wins verbatim in a ko store, and assignment is
+// creation-time only — switching the locale afterwards never rewrites the
+// stored alias (the existing no-rewrite contract, pinned on the ko path).
+func TestActorAliasKoreanExplicitNameAndLocaleChange(t *testing.T) {
+	st := koTinyStore(t)
+	defer st.Close()
+	if u := st.EnsureActor("claude:354bff2b", "에이전트 1호"); u.DisplayName != "에이전트 1호" {
+		t.Fatalf("explicit name=%q, want it verbatim", u.DisplayName)
+	}
+	assigned := st.EnsureActor("grok:tars", "").DisplayName
+	if err := st.SetLocale(locale.EN); err != nil {
+		t.Fatal(err)
+	}
+	if u := st.EnsureActor("grok:tars", ""); u.DisplayName != assigned {
+		t.Fatalf("after locale change: displayName=%q, want the stored alias %q kept", u.DisplayName, assigned)
+	}
+	if u := st.EnsureActor("claude:354bff2b", ""); u.DisplayName != "에이전트 1호" {
+		t.Fatalf("repeat without name: displayName=%q, want the explicit name kept", u.DisplayName)
+	}
+}
+
+// TestActorAliasKoreanConflictGetsNumericSuffix: the ko path resolves a
+// taken base name the same way — "씩씩한 수달 2 (Grok)", the number before
+// the harness suffix.
+func TestActorAliasKoreanConflictGetsNumericSuffix(t *testing.T) {
+	// Discover what the slug is assigned in a ko store, then pre-claim
+	// exactly that display name under a different account.
+	probe := koTinyStore(t)
+	full := probe.EnsureActor("grok:collide", "").DisplayName
+	probe.Close()
+	if !koreanAliasPattern.MatchString(full) || !strings.HasSuffix(full, " (Grok)") {
+		t.Fatalf("probe assigned %q, want a Hangul (Grok)-suffixed name", full)
+	}
+
+	st := koTinyStore(t)
+	defer st.Close()
+	st.Apply(fixtures.Doc{Users: []fixtures.User{
+		{AccountID: "5b10a2844c20165700ede77g", DisplayName: full},
+	}})
+	u := st.EnsureActor("grok:collide", "")
+	want := strings.TrimSuffix(full, " (Grok)") + " 2 (Grok)"
+	if u.DisplayName != want {
+		t.Fatalf("conflict: displayName=%q, want %q", u.DisplayName, want)
+	}
+}
+
+// TestActorAliasJaDeFallBackToEnglish: only ko carries its own
+// dictionaries. ja and de stores keep generating the English alias — the
+// documented fallback, not a missing locale.
+func TestActorAliasJaDeFallBackToEnglish(t *testing.T) {
+	for _, c := range []locale.Code{locale.JA, locale.DE} {
+		st := tinyStore(t)
+		u := st.EnsureActor("grok:tars", "")
+		name := u.DisplayName
+		st.Close()
+		if !aliasPattern.MatchString(name) {
+			t.Fatalf("locale %v: displayName %q, want the English alias shape", c, name)
+		}
+	}
+}
+
+// cutHarnessLabel drops the trailing " (…)" label so what remains is the
+// base alias ("Brisk Otter" / "씩씩한 수달").
+func cutHarnessLabel(name string) string {
+	if i := strings.LastIndex(name, " ("); i >= 0 && strings.HasSuffix(name, ")") {
+		return name[:i]
+	}
+	return name
+}
+
+// indexFold returns the position of w in list ignoring case, or -1.
+func indexFold(list []string, w string) int {
+	for i, x := range list {
+		if strings.EqualFold(x, w) {
+			return i
+		}
+	}
+	return -1
+}
+
+// TestActorAliasKoreanSharesIndexWithEnglish: the hash does not follow the
+// locale. The same slug lands on the same adjective and noun index in an en
+// and a ko store, and the harness suffix is identical — only the rendering
+// differs. Indices are recovered from the assigned names, not recomputed,
+// so this checks the observable contract instead of re-deriving FNV.
+func TestActorAliasKoreanSharesIndexWithEnglish(t *testing.T) {
+	en := tinyStore(t)
+	defer en.Close()
+	ko := koTinyStore(t)
+	defer ko.Close()
+	for _, slug := range []string{"claude:354bff2b", "grok:tars", "zeta:9f3a", "hermes:olymp"} {
+		enName := en.EnsureActor(slug, "").DisplayName
+		koName := ko.EnsureActor(slug, "").DisplayName
+		if m := regexp.MustCompile(` \([^()]*\)$`).FindString(enName); m != "" && !strings.HasSuffix(koName, m) {
+			t.Fatalf("slug %q: harness suffix differs between locales: en %q, ko %q", slug, enName, koName)
+		}
+		enWords := strings.Split(cutHarnessLabel(enName), " ")
+		koWords := strings.Split(cutHarnessLabel(koName), " ")
+		if len(enWords) != 2 || len(koWords) != 2 {
+			t.Fatalf("slug %q: expected two-word bases, got en %q / ko %q", slug, enName, koName)
+		}
+		ai, ni := indexFold(actorAdjectives, enWords[0]), indexFold(actorNouns, enWords[1])
+		ki, ji := indexFold(actorAdjectivesKO, koWords[0]), indexFold(actorNounsKO, koWords[1])
+		if ai < 0 || ni < 0 || ki < 0 || ji < 0 {
+			t.Fatalf("slug %q: a dictionary miss for en %q / ko %q", slug, enName, koName)
+		}
+		if ai != ki || ni != ji {
+			t.Fatalf("slug %q: index pairs differ between locales: en (%d,%d) vs ko (%d,%d)", slug, ai, ni, ki, ji)
+		}
+		t.Logf("%s -> en %q / ko %q (indices %d,%d)", slug, enName, koName, ai, ni)
+	}
+}
+
 // TestActorNameDictionaries: the word lists are the alias contract —
 // exactly 100 lowercase single words each, no duplicates, so the name
 // space stays 10,000 combinations and the shape test above can rely on
@@ -238,6 +411,39 @@ func TestActorNameDictionaries(t *testing.T) {
 		for _, noun := range actorNouns {
 			if adj == noun {
 				t.Errorf("word %q appears in both dictionaries", adj)
+			}
+		}
+	}
+}
+
+// TestActorNameDictionariesKO: the Korean word lists carry the same
+// contract as the English ones — exactly 100 single Hangul words each
+// (attributive-form adjectives, animal nouns), no duplicates within a
+// list, and no word shared across the two lists.
+func TestActorNameDictionariesKO(t *testing.T) {
+	word := regexp.MustCompile(`^[가-힣]+$`)
+	for name, list := range map[string][]string{
+		"actorAdjectivesKO": actorAdjectivesKO,
+		"actorNounsKO":      actorNounsKO,
+	} {
+		if len(list) != 100 {
+			t.Errorf("%s: %d entries, want 100", name, len(list))
+		}
+		seen := map[string]bool{}
+		for _, w := range list {
+			if !word.MatchString(w) {
+				t.Errorf("%s: %q is not a single Hangul word", name, w)
+			}
+			if seen[w] {
+				t.Errorf("%s: duplicate %q", name, w)
+			}
+			seen[w] = true
+		}
+	}
+	for _, adj := range actorAdjectivesKO {
+		for _, noun := range actorNounsKO {
+			if adj == noun {
+				t.Errorf("word %q appears in both Korean dictionaries", adj)
 			}
 		}
 	}

@@ -31,11 +31,12 @@ import (
 
 // Store is safe for concurrent use.
 type Store struct {
-	mu   sync.RWMutex
-	seed int64
-	clk  *clock.Clock
-	loc  locale.Code
-	tz   *time.Location
+	mu        sync.RWMutex
+	seed      int64
+	clk       *clock.Clock
+	wallClock bool
+	loc       locale.Code
+	tz        *time.Location
 
 	seqIssue   int
 	seqComment int
@@ -79,6 +80,10 @@ type Options struct {
 	// PersistPath set) means the 1s default; negative means write on every
 	// mutation, before the call returns.
 	PersistDebounce time.Duration
+	// WallClock stamps generated records with the machine's wall time
+	// instead of the deterministic seed clock — for a standalone workspace
+	// that is a real tracker, not a fixture-driven demo (gadak GDK-369).
+	WallClock bool
 }
 
 // DefaultPersistDebounce is the write-through quiet window.
@@ -105,9 +110,14 @@ func New(opt Options) *Store {
 	if opt.Locale == "" {
 		opt.Locale = locale.EN
 	}
+	clk := clock.New(opt.Seed)
+	if opt.WallClock {
+		clk = clock.NewWall()
+	}
 	s := &Store{
 		seed:              opt.Seed,
-		clk:               clock.New(opt.Seed),
+		clk:               clk,
+		wallClock:         opt.WallClock,
 		loc:               opt.Locale,
 		tz:                time.FixedZone("KST", 9*3600),
 		users:             map[string]*model.User{},
@@ -430,7 +440,9 @@ func (s *Store) Apply(doc fixtures.Doc) error {
 	defer s.mu.Unlock()
 	if doc.Seed != 0 {
 		s.seed = doc.Seed
-		s.clk = clock.New(doc.Seed)
+		if !s.wallClock { // a wall-clock store never falls back to seed time
+			s.clk = clock.New(doc.Seed)
+		}
 	}
 	if doc.Locale != "" {
 		s.loc = locale.Parse(doc.Locale)

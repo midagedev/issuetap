@@ -8,6 +8,7 @@ import "time"
 type Clock struct {
 	now  time.Time
 	step time.Duration
+	wall bool
 }
 
 // DefaultStart is 2026-01-15T00:00:00+0900 — a Seoul midnight, matching the
@@ -25,10 +26,24 @@ func New(seed int64) *Clock {
 	return &Clock{now: start, step: time.Minute}
 }
 
+// NewWall returns a clock that reads the machine's wall time — for a
+// standalone workspace that is someone's real tracker, not a demo
+// (gadak GDK-369: records stamped from the deterministic seed read as a
+// sync bug). Ticks stay strictly increasing even if the wall time stalls
+// or steps back, so `updated >=` delta reads never miss a write.
+func NewWall() *Clock {
+	return &Clock{now: time.Now(), step: time.Millisecond, wall: true}
+}
+
 // Now is the current instant without advancing.
 func (c *Clock) Now() time.Time {
 	if c == nil {
 		return DefaultStart()
+	}
+	if c.wall {
+		if t := time.Now(); t.After(c.now) {
+			return t
+		}
 	}
 	return c.now
 }
@@ -37,6 +52,12 @@ func (c *Clock) Now() time.Time {
 func (c *Clock) Tick() time.Time {
 	if c == nil {
 		return DefaultStart()
+	}
+	if c.wall {
+		if t := time.Now(); t.After(c.now) {
+			c.now = t
+			return c.now
+		}
 	}
 	c.now = c.now.Add(c.step)
 	return c.now

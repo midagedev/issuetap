@@ -39,6 +39,7 @@ type EmbeddedConfig struct {
 	FixtureBytes    []byte        // fixture contents when FixturePath is empty
 	PersistPath     string        // write-through state file (see store.Options)
 	PersistDebounce time.Duration // quiet window before a write (0 → 1s)
+	WallClock       bool          // stamp records with wall time, not the seed clock (see store.Options)
 }
 
 // Embedded is issuetap as an in-process dependency: the public embedding
@@ -71,6 +72,7 @@ func NewEmbedded(cfg EmbeddedConfig) (*Embedded, error) {
 	st, err := store.Open(store.Options{
 		Seed: seed, Locale: loc,
 		PersistPath: cfg.PersistPath, PersistDebounce: cfg.PersistDebounce,
+		WallClock: cfg.WallClock,
 	})
 	if err != nil {
 		return nil, err

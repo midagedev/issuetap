@@ -141,12 +141,19 @@ func (s *Server) getDevDetail(w http.ResponseWriter, r *http.Request) {
 }
 
 // postDevLink accepts one pull-request link and upserts it by URL.
+// Optional body fields author (the human login that opened the PR) and
+// branch (the head branch) ride the link (gadak GDK-589); empty values are
+// allowed so existing clients post unchanged. The actor — the identity that
+// wrote the link — is stamped here from the request identity and is never
+// read from the body, so a client cannot forge it.
 func (s *Server) postDevLink(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		IssueID string `json:"issueId"`
 		URL     string `json:"url"`
 		Name    string `json:"name"`
 		Status  string `json:"status"`
+		Author  string `json:"author"`
+		Branch  string `json:"branch"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.IssueID == "" || body.URL == "" {
 		writeJiraError(w, http.StatusBadRequest, "issueId and url are required")
@@ -159,7 +166,17 @@ func (s *Server) postDevLink(w http.ResponseWriter, r *http.Request) {
 		writeJiraError(w, http.StatusBadRequest, "status must be OPEN, MERGED or DECLINED")
 		return
 	}
-	pr, err := s.st.LinkDevPR(body.IssueID, model.DevPR{URL: body.URL, Name: body.Name, Status: status})
+	link := model.DevPR{URL: body.URL, Name: body.Name, Status: status}
+	if body.Author != "" {
+		link.Author = &model.DevAuthor{Name: body.Author}
+	}
+	if body.Branch != "" {
+		link.Source = &model.DevSource{Branch: body.Branch}
+	}
+	if u := s.identity(r); u != nil {
+		link.Actor = &model.DevActor{AccountID: u.AccountID, DisplayName: u.DisplayName}
+	}
+	pr, err := s.st.LinkDevPR(body.IssueID, link)
 	if err != nil {
 		if store.IsNotFound(err) {
 			writeJiraError(w, http.StatusNotFound, "Issue does not exist")

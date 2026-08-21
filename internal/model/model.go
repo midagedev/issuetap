@@ -89,13 +89,40 @@ type Project struct {
 }
 
 // DevPR is one linked pull request on an issue, in the vocabulary Jira's
-// dev-status detail uses (status OPEN | MERGED | DECLINED).
+// dev-status detail uses (status OPEN | MERGED | DECLINED). Author and
+// Source (Cloud's dev-status vocabulary) plus Actor (an issuetap extension)
+// are written by POST /rest/dev-status/{v}/issue/link; nil means the link
+// never carried that side (gadak GDK-589).
 type DevPR struct {
-	ID      string `json:"id"`
-	URL     string `json:"url"`
-	Name    string `json:"name"`
-	Status  string `json:"status"`
-	Updated string `json:"lastUpdate"`
+	ID      string     `json:"id"`
+	URL     string     `json:"url"`
+	Name    string     `json:"name"`
+	Status  string     `json:"status"`
+	Updated string     `json:"lastUpdate"`
+	Author  *DevAuthor `json:"author,omitempty"`
+	Source  *DevSource `json:"source,omitempty"`
+	Actor   *DevActor  `json:"actor,omitempty"`
+}
+
+// DevAuthor is the human who opened the PR. Cloud also carries avatar;
+// issuetap omits it.
+type DevAuthor struct {
+	Name string `json:"name"`
+}
+
+// DevSource is the PR's head side. Cloud also carries repository and other
+// keys; issuetap serves branch only.
+type DevSource struct {
+	Branch string `json:"branch"`
+}
+
+// DevActor is the identity that wrote the link — stamped by the server from
+// the request identity (X-Issuetap-Actor or the Basic user), never accepted
+// from the body. Cloud has no equivalent, so the whole object is omitted
+// when a link has none.
+type DevActor struct {
+	AccountID   string `json:"accountId"`
+	DisplayName string `json:"displayName"`
 }
 
 // Visibility is a restricted comment audience. Type is role or group;

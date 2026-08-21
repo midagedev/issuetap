@@ -154,12 +154,20 @@ type Issue struct {
 }
 
 // DevPR is one linked pull request in a fixture / persisted document.
+// Author is the human login that opened the PR, Branch its head branch, and
+// ActorAccountID / ActorDisplayName the identity that wrote the link —
+// flat keys like every other row here; all four are omitempty so
+// pre-GDK-589 fixtures stay key-identical.
 type DevPR struct {
-	ID      string `json:"id,omitempty" yaml:"id,omitempty"`
-	URL     string `json:"url" yaml:"url"`
-	Name    string `json:"name,omitempty" yaml:"name,omitempty"`
-	Status  string `json:"status,omitempty" yaml:"status,omitempty"`
-	Updated string `json:"updated,omitempty" yaml:"updated,omitempty"`
+	ID               string `json:"id,omitempty" yaml:"id,omitempty"`
+	URL              string `json:"url" yaml:"url"`
+	Name             string `json:"name,omitempty" yaml:"name,omitempty"`
+	Status           string `json:"status,omitempty" yaml:"status,omitempty"`
+	Updated          string `json:"updated,omitempty" yaml:"updated,omitempty"`
+	Author           string `json:"author,omitempty" yaml:"author,omitempty"`
+	Branch           string `json:"branch,omitempty" yaml:"branch,omitempty"`
+	ActorAccountID   string `json:"actorAccountId,omitempty" yaml:"actorAccountId,omitempty"`
+	ActorDisplayName string `json:"actorDisplayName,omitempty" yaml:"actorDisplayName,omitempty"`
 }
 
 type Comment struct {

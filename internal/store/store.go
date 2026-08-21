@@ -825,10 +825,20 @@ func (s *Store) putIssue(in fixtures.Issue) error {
 		iss.Comments = append(iss.Comments, s.makeComment(c, created))
 	}
 	for _, pr := range in.DevPRs {
-		iss.DevPRs = append(iss.DevPRs, model.DevPR{
+		mpr := model.DevPR{
 			ID: pr.ID, URL: pr.URL, Name: pr.Name,
 			Status: first(pr.Status, "OPEN"), Updated: first(pr.Updated, created),
-		})
+		}
+		if pr.Author != "" {
+			mpr.Author = &model.DevAuthor{Name: pr.Author}
+		}
+		if pr.Branch != "" {
+			mpr.Source = &model.DevSource{Branch: pr.Branch}
+		}
+		if pr.ActorAccountID != "" || pr.ActorDisplayName != "" {
+			mpr.Actor = &model.DevActor{AccountID: pr.ActorAccountID, DisplayName: pr.ActorDisplayName}
+		}
+		iss.DevPRs = append(iss.DevPRs, mpr)
 	}
 	for _, a := range in.Attachments {
 		att, err := s.makeAttach(a, created)
@@ -1366,7 +1376,11 @@ func (s *Store) Issue(keyOrID string) *model.Issue {
 // LinkDevPR upserts one pull-request link on an issue, keyed by URL (the
 // idempotent key, same rule Linear uses for attachments). Status defaults to
 // OPEN; an existing row's empty fields are kept unless the new call fills
-// them.
+// them — author, source, and actor included, so a re-POST from a client
+// that predates GDK-589 cannot erase them (a nil side means "not sent",
+// an empty string never overwrites a stored value). The actor is whatever
+// the caller stamped (the API layer stamps the request identity), so each
+// re-POST reattributes the link to its latest writer.
 func (s *Store) LinkDevPR(keyOrID string, pr model.DevPR) (model.DevPR, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -1398,6 +1412,15 @@ func (s *Store) LinkDevPR(keyOrID string, pr model.DevPR) (model.DevPR, error) {
 		if iss.DevPRs[i].URL == pr.URL {
 			if pr.Name == "" {
 				pr.Name = iss.DevPRs[i].Name
+			}
+			if pr.Author == nil {
+				pr.Author = iss.DevPRs[i].Author
+			}
+			if pr.Source == nil {
+				pr.Source = iss.DevPRs[i].Source
+			}
+			if pr.Actor == nil {
+				pr.Actor = iss.DevPRs[i].Actor
 			}
 			iss.DevPRs[i] = pr
 			return pr, s.markDirtyLocked()
@@ -3434,9 +3457,20 @@ func (s *Store) issueToFix(iss *model.Issue) fixtures.Issue {
 		out.Links = append(out.Links, fixtures.Link{Type: l.TypeName, Inward: l.InwardKey, Outward: l.OutwardKey})
 	}
 	for _, pr := range iss.DevPRs {
-		out.DevPRs = append(out.DevPRs, fixtures.DevPR{
+		fpr := fixtures.DevPR{
 			ID: pr.ID, URL: pr.URL, Name: pr.Name, Status: pr.Status, Updated: pr.Updated,
-		})
+		}
+		if pr.Author != nil {
+			fpr.Author = pr.Author.Name
+		}
+		if pr.Source != nil {
+			fpr.Branch = pr.Source.Branch
+		}
+		if pr.Actor != nil {
+			fpr.ActorAccountID = pr.Actor.AccountID
+			fpr.ActorDisplayName = pr.Actor.DisplayName
+		}
+		out.DevPRs = append(out.DevPRs, fpr)
 	}
 	for _, h := range iss.Histories {
 		fh := fixtures.History{ID: h.ID, At: h.Created, Author: h.Author.AccountID}

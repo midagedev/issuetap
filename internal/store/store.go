@@ -2979,10 +2979,12 @@ func (s *Store) resolveNamedLocked(project, field string, item any, extra []mode
 			return n, nil
 		}
 	}
-	if len(cat) == 0 {
-		return model.Named{ID: slugID(name), Name: name}, nil
-	}
-	return model.Named{}, FieldError{Field: field, Msg: "unknown " + field}
+	// A miss by name mints (gadak GDK-678, 2026-08-23): the catalog is
+	// derived from issues, so "not in the catalog yet" is the normal state
+	// of every new version/component — before this, only the first one
+	// (empty catalog) could be created by name and the second 400ed.
+	// A miss by id above still refuses: an id is a pointer, not a request.
+	return model.Named{ID: slugID(name), Name: name}, nil
 }
 
 func (s *Store) projectNamedCatalogLocked(project, field string) []model.Named {

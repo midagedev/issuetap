@@ -1,10 +1,12 @@
-// Package store is the in-memory, deterministic Atlassian graph.
+// Package store is the deterministic Atlassian graph.
 // Same fixture + same seed → same ids, timestamps, and ordering.
-// There is no database. Snapshot/restore is a fixture document.
+// The working copy is process-local SQLite (gob-blob tables); durable
+// bytes are still a YAML fixture document via snapshot/restore.
 package store
 
 import (
 	"crypto/sha1"
+	"database/sql"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -32,6 +34,7 @@ import (
 // Store is safe for concurrent use.
 type Store struct {
 	mu        sync.RWMutex
+	db        *sql.DB // process-local working copy; YAML persist stays durable
 	seed      int64
 	clk       *clock.Clock
 	wallClock bool
@@ -43,6 +46,9 @@ type Store struct {
 	// locale — what a live Cloud site does (gadak GDK-597).
 	prioNamesEnglish bool
 
+	// Sequence counters stay in-process under mu. Stage 0's durable
+	// snapshot is YAML; SQL is the working copy of the graph, not of
+	// the id mint. Clock/persistState also stay here — they are not rows.
 	seqIssue   int
 	seqComment int
 	seqHist    int
@@ -52,25 +58,7 @@ type Store struct {
 	seqProj    int
 	seqSpace   int
 
-	users        map[string]*model.User // accountId or name
-	usersByEmail map[string]*model.User
-	projects     map[string]*model.Project
-	statuses     map[string]*model.Status
-	priorities   []*model.Priority
-	prioByID     map[string]*model.Priority
-	types        map[string]*model.IssueType
-	resolutions  map[string]*model.Resolution
-	fields       []model.FieldInfo
-	filters      []model.Filter
-	// transitionScreens is dest-status-id → field-id → spec. Empty means
-	// every synthetic transition has an empty Cloud screen.
-	transitionScreens map[string]map[string]fixtures.TransitionScreenField
-	issues            map[string]*model.Issue
-	spaces            map[string]*model.Space
-	pages             map[string]*model.Page
-	pageComments      map[string][]model.PageComment // parent content id
-	attachBytes       map[string][]byte
-	persist           *persistState
+	persist *persistState
 }
 
 // Options seed a store.
@@ -127,25 +115,13 @@ func New(opt Options) *Store {
 		clk = clock.NewWall()
 	}
 	s := &Store{
-		seed:              opt.Seed,
-		clk:               clk,
-		wallClock:         opt.WallClock,
-		loc:               opt.Locale,
-		prioNamesEnglish:  opt.PriorityNamesEnglish,
-		tz:                time.FixedZone("KST", 9*3600),
-		users:             map[string]*model.User{},
-		usersByEmail:      map[string]*model.User{},
-		projects:          map[string]*model.Project{},
-		statuses:          map[string]*model.Status{},
-		prioByID:          map[string]*model.Priority{},
-		types:             map[string]*model.IssueType{},
-		resolutions:       map[string]*model.Resolution{},
-		transitionScreens: map[string]map[string]fixtures.TransitionScreenField{},
-		issues:            map[string]*model.Issue{},
-		spaces:            map[string]*model.Space{},
-		pages:             map[string]*model.Page{},
-		pageComments:      map[string][]model.PageComment{},
-		attachBytes:       map[string][]byte{},
+		db:               openWorkingDB(),
+		seed:             opt.Seed,
+		clk:              clk,
+		wallClock:        opt.WallClock,
+		loc:              opt.Locale,
+		prioNamesEnglish: opt.PriorityNamesEnglish,
+		tz:               time.FixedZone("KST", 9*3600),
 	}
 	if opt.PersistPath != "" {
 		debounce := opt.PersistDebounce
@@ -346,6 +322,9 @@ func (s *Store) Close() error {
 		p.timer.Stop()
 		p.timer = nil
 	}
+	// The working copy stays readable after Close: the previous map-backed
+	// store kept the graph, and persist tests (TestRestartDoesNotReuseIds)
+	// still Issue() the closed handle. Stage-3 cutover can Close the db.
 	return err
 }
 
@@ -362,31 +341,30 @@ func (s *Store) PersistErr() error {
 
 func (s *Store) installDefaultCatalog() {
 	addS := func(id, name, cat string) {
-		s.statuses[id] = &model.Status{
+		s.putStatusLocked(&model.Status{
 			ID: id, Name: name,
 			StatusCategory: model.StatusCategory{
 				ID: model.CategoryID(cat), Key: cat,
 				Name: name, ColorName: model.CategoryColor(cat),
 			},
-		}
+		})
 	}
 	addS("10000", "To Do", "new")
 	addS("3", "In Progress", "indeterminate")
 	addS("10003", "Done", "done")
 
-	s.priorities = []*model.Priority{
+	for _, p := range []*model.Priority{
 		{ID: "1", Name: "Highest", StatusColor: "#d04437", Rank: 0},
 		{ID: "2", Name: "High", StatusColor: "#f15C75", Rank: 1},
 		{ID: "3", Name: "Medium", StatusColor: "#f79232", Rank: 2},
 		{ID: "4", Name: "Low", StatusColor: "#707070", Rank: 3},
 		{ID: "5", Name: "Lowest", StatusColor: "#999999", Rank: 4},
-	}
-	for _, p := range s.priorities {
-		s.prioByID[p.ID] = p
+	} {
+		s.putPriorityLocked(p)
 	}
 
 	addT := func(id, name string, hier int, sub bool) {
-		s.types[id] = &model.IssueType{ID: id, Name: name, HierarchyLevel: hier, Subtask: sub}
+		s.putTypeLocked(&model.IssueType{ID: id, Name: name, HierarchyLevel: hier, Subtask: sub})
 	}
 	addT("10000", "Epic", 1, false)
 	addT("10003", "Task", 0, false)
@@ -394,12 +372,12 @@ func (s *Store) installDefaultCatalog() {
 	addT("10004", "Story", 0, false)
 	addT("10002", "Sub-task", -1, true)
 
-	s.resolutions["10000"] = &model.Resolution{ID: "10000", Name: "Done"}
-	s.resolutions["10001"] = &model.Resolution{ID: "10001", Name: "Won't Do"}
-	s.resolutions["10002"] = &model.Resolution{ID: "10002", Name: "Duplicate"}
-	s.resolutions["10003"] = &model.Resolution{ID: "10003", Name: "Cannot Reproduce"}
+	s.putResolutionLocked(&model.Resolution{ID: "10000", Name: "Done"})
+	s.putResolutionLocked(&model.Resolution{ID: "10001", Name: "Won't Do"})
+	s.putResolutionLocked(&model.Resolution{ID: "10002", Name: "Duplicate"})
+	s.putResolutionLocked(&model.Resolution{ID: "10003", Name: "Cannot Reproduce"})
 
-	s.fields = defaultFields()
+	s.replaceFieldsLocked(defaultFields())
 }
 
 func defaultFields() []model.FieldInfo {
@@ -476,7 +454,7 @@ func (s *Store) Apply(doc fixtures.Doc) error {
 	for _, u := range doc.Users {
 		s.putUser(u)
 	}
-	if len(s.users) == 0 {
+	if s.userCountLocked() == 0 {
 		s.putUser(fixtures.User{
 			AccountID: "5b10a2844c20165700ede21g", DisplayName: "Ada Lovelace",
 			Email: "you@example.com", Name: "ada", Key: "ada",
@@ -489,31 +467,28 @@ func (s *Store) Apply(doc fixtures.Doc) error {
 		s.putStatus(st)
 	}
 	if len(doc.Priorities) > 0 {
-		s.priorities = s.priorities[:0]
-		s.prioByID = map[string]*model.Priority{}
+		s.clearPrioritiesLocked()
 		for i, p := range doc.Priorities {
-			pp := &model.Priority{ID: p.ID, Name: p.Name, Rank: i}
-			s.priorities = append(s.priorities, pp)
-			s.prioByID[p.ID] = pp
+			s.putPriorityLocked(&model.Priority{ID: p.ID, Name: p.Name, Rank: i})
 		}
 	}
 	for _, t := range doc.IssueTypes {
-		s.types[t.ID] = &model.IssueType{
+		s.putTypeLocked(&model.IssueType{
 			ID: t.ID, Name: t.Name, HierarchyLevel: t.HierarchyLevel, Subtask: t.Subtask,
-		}
+		})
 	}
 	for _, r := range doc.Resolutions {
-		s.resolutions[r.ID] = &model.Resolution{ID: r.ID, Name: r.Name}
+		s.putResolutionLocked(&model.Resolution{ID: r.ID, Name: r.Name})
 	}
 	for _, f := range doc.Fields {
 		s.upsertField(f)
 	}
 	for _, f := range doc.Filters {
-		s.filters = append(s.filters, model.Filter{
+		s.appendFilterLocked(model.Filter{
 			ID: f.ID, Name: f.Name, JQL: f.JQL, Favourite: f.Favourite, Owner: f.Owner,
 		})
 	}
-	s.transitionScreens = map[string]map[string]fixtures.TransitionScreenField{}
+	s.clearTransitionScreensLocked()
 	for _, sc := range doc.TransitionScreens {
 		if sc.Status == "" {
 			continue
@@ -522,7 +497,7 @@ func (s *Store) Apply(doc fixtures.Doc) error {
 		for k, v := range sc.Fields {
 			fields[k] = v
 		}
-		s.transitionScreens[sc.Status] = fields
+		s.putTransitionScreenLocked(sc.Status, fields)
 	}
 	for _, p := range doc.Spaces {
 		s.putSpace(p)
@@ -561,7 +536,7 @@ func (s *Store) seedSeqsLocked() {
 			maxC = n - 30000
 		}
 	}
-	for _, iss := range s.issues {
+	for _, iss := range s.allIssuesLocked() {
 		for _, c := range iss.Comments {
 			bumpComment(c.ID)
 		}
@@ -576,8 +551,8 @@ func (s *Store) seedSeqsLocked() {
 			}
 		}
 	}
-	for _, cms := range s.pageComments {
-		for _, c := range cms {
+	for _, pid := range s.pageCommentParentIDsLocked() {
+		for _, c := range s.pageCommentsLocked(pid) {
 			bumpComment(c.ID)
 		}
 	}
@@ -593,7 +568,7 @@ func (s *Store) seedSeqsLocked() {
 	// Runtime page ids: 20000+seqPage. Authored ids outside that band
 	// (and comment ids in 30000+) are left alone.
 	maxP := 0
-	for id := range s.pages {
+	for _, id := range s.pageIDsLocked() {
 		n, err := strconv.Atoi(id)
 		if err != nil {
 			continue
@@ -627,7 +602,7 @@ func (s *Store) seedClockLocked() {
 			}
 		}
 	}
-	for _, iss := range s.issues {
+	for _, iss := range s.allIssuesLocked() {
 		see(iss.Created)
 		see(iss.Updated)
 		for _, c := range iss.Comments {
@@ -641,12 +616,12 @@ func (s *Store) seedClockLocked() {
 			see(h.Created)
 		}
 	}
-	for _, p := range s.pages {
+	for _, p := range s.pagesLocked() {
 		see(p.When)
 		for _, v := range p.Versions {
 			see(v.When)
 		}
-		for _, c := range s.pageComments[p.ID] {
+		for _, c := range s.pageCommentsLocked(p.ID) {
 			see(c.When)
 		}
 	}
@@ -659,7 +634,7 @@ func (s *Store) seedClockLocked() {
 // id so CreateIssue does not reuse a fixture id (10000+seq).
 func (s *Store) seedIssueSeqLocked() {
 	max := 0
-	for _, iss := range s.issues {
+	for _, iss := range s.allIssuesLocked() {
 		n, err := strconv.Atoi(iss.ID)
 		if err != nil {
 			continue
@@ -693,13 +668,7 @@ func (s *Store) putUser(u fixtures.User) *model.User {
 		TimeZone: tz, AccountType: first(u.AccountType, "atlassian"),
 		AvatarURLs: avatarURLs(id),
 	}
-	s.users[id] = m
-	if m.Name != "" {
-		s.users[m.Name] = m
-	}
-	if m.Email != "" {
-		s.usersByEmail[strings.ToLower(m.Email)] = m
-	}
+	s.putUserLocked(m)
 	return m
 }
 
@@ -729,10 +698,10 @@ func (s *Store) putProject(p fixtures.Project) {
 	if style == "" {
 		style = "classic"
 	}
-	s.projects[p.Key] = &model.Project{
+	s.putProjectLocked(&model.Project{
 		ID: id, Key: p.Key, Name: p.Name, TypeKey: typ, Style: style,
 		Simplified: style == "next-gen",
-	}
+	})
 }
 
 // CreateProject adds a project (Cloud v3 POST /rest/api/3/project). A
@@ -743,14 +712,14 @@ func (s *Store) CreateProject(key, name string) (*model.Project, error) {
 	if key == "" {
 		return nil, fmt.Errorf("project key is required")
 	}
-	if s.projects[key] != nil {
+	if s.projectByKeyLocked(key) != nil {
 		return nil, fmt.Errorf("Project '%s' uses this project key.", key)
 	}
 	if name == "" {
 		name = key
 	}
 	s.putProject(fixtures.Project{Key: key, Name: name})
-	p := *s.projects[key]
+	p := *s.projectByKeyLocked(key)
 	return &p, s.markDirtyLocked()
 }
 
@@ -759,13 +728,13 @@ func (s *Store) putStatus(st fixtures.Status) {
 	if cat == "" {
 		cat = "new"
 	}
-	s.statuses[st.ID] = &model.Status{
+	s.putStatusLocked(&model.Status{
 		ID: st.ID, Name: st.Name,
 		StatusCategory: model.StatusCategory{
 			ID: model.CategoryID(cat), Key: cat,
 			Name: st.Name, ColorName: model.CategoryColor(cat),
 		},
-	}
+	})
 }
 
 func (s *Store) putSpace(p fixtures.Space) {
@@ -778,10 +747,10 @@ func (s *Store) putSpace(p fixtures.Space) {
 	if typ == "" {
 		typ = "global"
 	}
-	s.spaces[p.Key] = &model.Space{
+	s.putSpaceLocked(&model.Space{
 		ID: id, Key: p.Key, Name: p.Name, Type: typ, Status: "current",
 		HomepageID: p.Homepage,
-	}
+	})
 }
 
 func (s *Store) putIssue(in fixtures.Issue) error {
@@ -794,7 +763,7 @@ func (s *Store) putIssue(in fixtures.Issue) error {
 	if project == "" {
 		project, _, _ = strings.Cut(in.Key, "-")
 	}
-	if _, ok := s.projects[project]; !ok {
+	if s.projectByKeyLocked(project) == nil {
 		s.putProject(fixtures.Project{Key: project, Name: project})
 	}
 	created := in.Created
@@ -892,7 +861,7 @@ func (s *Store) putIssue(in fixtures.Issue) error {
 			iss.Histories = append(iss.Histories, s.makeHistory(h, iss))
 		}
 	}
-	s.issues[iss.Key] = iss
+	s.putIssueLocked(iss)
 	return nil
 }
 
@@ -946,7 +915,7 @@ func (s *Store) makeAttach(a fixtures.Attachment, fallback string) (model.Attach
 	default:
 		body = []byte("issuetap fixture attachment " + a.Filename)
 	}
-	s.attachBytes[id] = body
+	s.putAttachBytesLocked(id, body)
 	media := uuid5(id)
 	return model.Attachment{
 		ID: id, Filename: a.Filename, MimeType: mime, Size: int64(len(body)),
@@ -1010,16 +979,16 @@ func (s *Store) synthesizeHistory(iss *model.Issue) []model.History {
 
 func (s *Store) firstStatus(cat string) *model.Status {
 	var ids []string
-	for id, st := range s.statuses {
+	for _, st := range s.statusesLocked() {
 		if st.StatusCategory.Key == cat {
-			ids = append(ids, id)
+			ids = append(ids, st.ID)
 		}
 	}
 	if len(ids) == 0 {
 		return nil
 	}
 	sort.Strings(ids)
-	return s.statuses[ids[0]]
+	return s.statusByIDLocked(ids[0])
 }
 
 func (s *Store) putPage(p fixtures.Page) {
@@ -1084,9 +1053,10 @@ func (s *Store) putPage(p fixtures.Page) {
 			pg.AuthorID = last.AuthorID
 		}
 	}
-	s.pages[id] = pg
-	if sp := s.spaces[p.Space]; sp != nil && sp.HomepageID == "" {
+	s.putPageLocked(pg)
+	if sp := s.spaceByKeyLocked(p.Space); sp != nil && sp.HomepageID == "" {
 		sp.HomepageID = id
+		s.putSpaceLocked(sp)
 	}
 	for _, c := range p.Comments {
 		cid := c.ID
@@ -1099,7 +1069,7 @@ func (s *Store) putPage(p fixtures.Page) {
 		if c.ReplyTo != "" {
 			parent = c.ReplyTo
 		}
-		s.pageComments[parent] = append(s.pageComments[parent], model.PageComment{
+		s.appendPageCommentLocked(parent, model.PageComment{
 			ID: cid, Title: "Re: " + p.Title, ParentID: parent,
 			BodyADF: adf.Doc(c.Body), BodyText: c.Body, Version: 1, When: cwhen,
 			AuthorID: s.resolveUser(c.Author),
@@ -1111,13 +1081,13 @@ func (s *Store) resolveUser(ref string) string {
 	if ref == "" {
 		return ""
 	}
-	if u, ok := s.users[ref]; ok {
+	if u := s.userByKeyLocked(ref); u != nil {
 		return u.AccountID
 	}
-	if u, ok := s.usersByEmail[strings.ToLower(ref)]; ok {
+	if u := s.userByEmailLocked(ref); u != nil {
 		return u.AccountID
 	}
-	for _, u := range s.users {
+	for _, u := range s.usersLocked() {
 		if u.DisplayName == ref || u.Name == ref || u.Key == ref {
 			return u.AccountID
 		}
@@ -1130,13 +1100,13 @@ func (s *Store) resolveUser(ref string) string {
 func (s *Store) userOrDefault(ref string) *model.User {
 	id := s.resolveUser(ref)
 	if id != "" {
-		if u := s.users[id]; u != nil {
+		if u := s.userByAccountLocked(id); u != nil {
 			cp := *u
 			return &cp
 		}
 	}
-	for _, u := range s.users {
-		cp := *u
+	if users := s.usersLocked(); len(users) > 0 {
+		cp := *users[0]
 		return &cp
 	}
 	u := s.putUser(fixtures.User{
@@ -1159,7 +1129,7 @@ func (s *Store) userOrDefault(ref string) *model.User {
 func (s *Store) EnsureActor(slug, name string) *model.User {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if u, ok := s.users[slug]; ok {
+	if u := s.userByKeyLocked(slug); u != nil {
 		cp := *u
 		return &cp
 	}
@@ -1181,16 +1151,16 @@ func (s *Store) resolveType(ref string) string {
 	if ref == "" {
 		return "10003" // Task
 	}
-	if t, ok := s.types[ref]; ok {
+	if t := s.typeByIDLocked(ref); t != nil {
 		return t.ID
 	}
-	for _, t := range s.types {
+	for _, t := range s.typesLocked() {
 		if strings.EqualFold(t.Name, ref) {
 			return t.ID
 		}
 	}
 	// Create so a fixture can introduce a site-specific type.
-	s.types[ref] = &model.IssueType{ID: ref, Name: ref}
+	s.putTypeLocked(&model.IssueType{ID: ref, Name: ref})
 	return ref
 }
 
@@ -1198,18 +1168,18 @@ func (s *Store) resolveStatus(ref string) string {
 	if ref == "" {
 		return "10000"
 	}
-	if st, ok := s.statuses[ref]; ok {
+	if st := s.statusByIDLocked(ref); st != nil {
 		return st.ID
 	}
-	for _, st := range s.statuses {
+	for _, st := range s.statusesLocked() {
 		if strings.EqualFold(st.Name, ref) {
 			return st.ID
 		}
 	}
-	s.statuses[ref] = &model.Status{
+	s.putStatusLocked(&model.Status{
 		ID: ref, Name: ref,
 		StatusCategory: model.StatusCategory{ID: 2, Key: "new", Name: ref, ColorName: "blue-gray"},
-	}
+	})
 	return ref
 }
 
@@ -1217,10 +1187,10 @@ func (s *Store) resolvePriority(ref string) string {
 	if ref == "" {
 		return "3"
 	}
-	if p, ok := s.prioByID[ref]; ok {
+	if p := s.priorityByIDLocked(ref); p != nil {
 		return p.ID
 	}
-	for _, p := range s.priorities {
+	for _, p := range s.prioritiesLocked() {
 		if strings.EqualFold(p.Name, ref) {
 			return p.ID
 		}
@@ -1232,10 +1202,10 @@ func (s *Store) resolveResolution(ref string) string {
 	if ref == "" {
 		return ""
 	}
-	if r, ok := s.resolutions[ref]; ok {
+	if r := s.resolutionByIDLocked(ref); r != nil {
 		return r.ID
 	}
-	for _, r := range s.resolutions {
+	for _, r := range s.resolutionsLocked() {
 		if strings.EqualFold(r.Name, ref) {
 			return r.ID
 		}
@@ -1246,19 +1216,19 @@ func (s *Store) resolveResolution(ref string) string {
 func (s *Store) displayFor(fieldID, id string) string {
 	switch fieldID {
 	case "status":
-		if st := s.statuses[id]; st != nil {
+		if st := s.statusByIDLocked(id); st != nil {
 			return st.Name
 		}
 	case "priority":
-		if p := s.prioByID[id]; p != nil {
+		if p := s.priorityByIDLocked(id); p != nil {
 			return p.Name
 		}
 	case "issuetype":
-		if t := s.types[id]; t != nil {
+		if t := s.typeByIDLocked(id); t != nil {
 			return t.Name
 		}
 	case "assignee", "reporter":
-		if u := s.users[id]; u != nil {
+		if u := s.userByAccountLocked(id); u != nil {
 			return u.DisplayName
 		}
 	}
@@ -1340,28 +1310,28 @@ func (s *Store) prioLoc() locale.Code {
 func (s *Store) Lookup() jql.Lookup {
 	return jql.Lookup{
 		Status: func(id string) *model.Status {
-			if st := s.statuses[id]; st != nil {
+			if st := s.statusByIDLocked(id); st != nil {
 				cp := locale.OverlayStatus(s.loc, *st)
 				return &cp
 			}
 			return nil
 		},
 		IssueType: func(id string) *model.IssueType {
-			if t := s.types[id]; t != nil {
+			if t := s.typeByIDLocked(id); t != nil {
 				cp := locale.OverlayIssueType(s.loc, *t)
 				return &cp
 			}
 			return nil
 		},
 		Priority: func(id string) *model.Priority {
-			if p := s.prioByID[id]; p != nil {
+			if p := s.priorityByIDLocked(id); p != nil {
 				cp := locale.OverlayPriority(s.prioLoc(), *p)
 				return &cp
 			}
 			return nil
 		},
 		User: func(id string) *model.User {
-			if u := s.users[id]; u != nil {
+			if u := s.userByAccountLocked(id); u != nil {
 				cp := *u
 				return &cp
 			}
@@ -1369,15 +1339,6 @@ func (s *Store) Lookup() jql.Lookup {
 		},
 		Location: s.tz,
 	}
-}
-
-// AllIssues returns a snapshot copy of issue pointers (do not mutate).
-func (s *Store) allIssuesLocked() []*model.Issue {
-	out := make([]*model.Issue, 0, len(s.issues))
-	for _, iss := range s.issues {
-		out = append(out, iss)
-	}
-	return out
 }
 
 // Search runs JQL and pages by nextPageToken (opaque offset string).
@@ -1413,15 +1374,7 @@ func (s *Store) Count(jqlText string) (int, error) {
 func (s *Store) Issue(keyOrID string) *model.Issue {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	if iss, ok := s.issues[keyOrID]; ok {
-		return iss
-	}
-	for _, iss := range s.issues {
-		if iss.ID == keyOrID {
-			return iss
-		}
-	}
-	return nil
+	return s.issueLocked(keyOrID)
 }
 
 // LinkDevPR upserts one pull-request link on an issue, keyed by URL (the
@@ -1435,15 +1388,10 @@ func (s *Store) Issue(keyOrID string) *model.Issue {
 // issueLocked resolves a key or numeric id; caller holds s.mu (write, via
 // the Link* dev-link methods).
 func (s *Store) issueLocked(keyOrID string) *model.Issue {
-	if iss, ok := s.issues[keyOrID]; ok {
+	if iss := s.issueByKeyLocked(keyOrID); iss != nil {
 		return iss
 	}
-	for _, cand := range s.issues {
-		if cand.ID == keyOrID {
-			return cand
-		}
-	}
-	return nil
+	return s.issueByIDLocked(keyOrID)
 }
 
 func (s *Store) LinkDevPR(keyOrID string, pr model.DevPR) (model.DevPR, error) {
@@ -1480,10 +1428,12 @@ func (s *Store) LinkDevPR(keyOrID string, pr model.DevPR) (model.DevPR, error) {
 				pr.Actor = iss.DevPRs[i].Actor
 			}
 			iss.DevPRs[i] = pr
+			s.putIssueLocked(iss)
 			return pr, s.markDirtyLocked()
 		}
 	}
 	iss.DevPRs = append(iss.DevPRs, pr)
+	s.putIssueLocked(iss)
 	return pr, s.markDirtyLocked()
 }
 
@@ -1516,10 +1466,12 @@ func (s *Store) LinkDevDeployment(keyOrID string, dep model.DevDeployment) (mode
 				dep.Actor = iss.DevDeployments[i].Actor
 			}
 			iss.DevDeployments[i] = dep
+			s.putIssueLocked(iss)
 			return dep, s.markDirtyLocked()
 		}
 	}
 	iss.DevDeployments = append(iss.DevDeployments, dep)
+	s.putIssueLocked(iss)
 	return dep, s.markDirtyLocked()
 }
 
@@ -1550,10 +1502,12 @@ func (s *Store) LinkDevBuild(keyOrID string, b model.DevBuild) (model.DevBuild, 
 				b.Actor = iss.DevBuilds[i].Actor
 			}
 			iss.DevBuilds[i] = b
+			s.putIssueLocked(iss)
 			return b, s.markDirtyLocked()
 		}
 	}
 	iss.DevBuilds = append(iss.DevBuilds, b)
+	s.putIssueLocked(iss)
 	return b, s.markDirtyLocked()
 }
 
@@ -1614,6 +1568,8 @@ func (s *Store) AddIssueLink(typeID, typeName, outwardRef, inwardRef string) err
 	now := clock.Format(s.clk.Tick())
 	outward.Updated = now
 	inward.Updated = now
+	s.putIssueLocked(outward)
+	s.putIssueLocked(inward)
 	return s.markDirtyLocked()
 }
 
@@ -1661,11 +1617,7 @@ func issueHasDirectedLink(iss *model.Issue, typeName string, outward bool, other
 func (s *Store) Projects() []*model.Project {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	out := make([]*model.Project, 0, len(s.projects))
-	for _, p := range s.projects {
-		cp := *p
-		out = append(out, &cp)
-	}
+	out := s.projectsLocked()
 	sort.Slice(out, func(i, j int) bool { return out[i].Key < out[j].Key })
 	return out
 }
@@ -1674,7 +1626,7 @@ func (s *Store) Projects() []*model.Project {
 func (s *Store) Project(key string) *model.Project {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	p := s.projects[key]
+	p := s.projectByKeyLocked(key)
 	if p == nil {
 		return nil
 	}
@@ -1689,11 +1641,9 @@ func (s *Store) projectByIDOrKey(idOrKey string) *model.Project {
 	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	for _, p := range s.projects {
-		if p.ID == idOrKey {
-			cp := *p
-			return &cp
-		}
+	if p := s.projectByIDLocked(idOrKey); p != nil {
+		cp := *p
+		return &cp
 	}
 	return nil
 }
@@ -1702,14 +1652,10 @@ func (s *Store) projectByIDOrKey(idOrKey string) *model.Project {
 func (s *Store) Statuses() []model.Status {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	ids := make([]string, 0, len(s.statuses))
-	for id := range s.statuses {
-		ids = append(ids, id)
-	}
-	sort.Strings(ids)
+	ids := s.statusIDsLocked()
 	out := make([]model.Status, 0, len(ids))
 	for _, id := range ids {
-		out = append(out, locale.OverlayStatus(s.loc, *s.statuses[id]))
+		out = append(out, locale.OverlayStatus(s.loc, *s.statusByIDLocked(id)))
 	}
 	return out
 }
@@ -1718,7 +1664,7 @@ func (s *Store) Statuses() []model.Status {
 func (s *Store) Status(id string) *model.Status {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	st := s.statuses[id]
+	st := s.statusByIDLocked(id)
 	if st == nil {
 		return nil
 	}
@@ -1730,8 +1676,9 @@ func (s *Store) Status(id string) *model.Status {
 func (s *Store) Priorities() []model.Priority {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	out := make([]model.Priority, 0, len(s.priorities))
-	for _, p := range s.priorities {
+	list := s.prioritiesLocked()
+	out := make([]model.Priority, 0, len(list))
+	for _, p := range list {
 		out = append(out, locale.OverlayPriority(s.prioLoc(), *p))
 	}
 	return out
@@ -1741,7 +1688,7 @@ func (s *Store) Priorities() []model.Priority {
 func (s *Store) Priority(id string) *model.Priority {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	p := s.prioByID[id]
+	p := s.priorityByIDLocked(id)
 	if p == nil {
 		return nil
 	}
@@ -1753,14 +1700,10 @@ func (s *Store) Priority(id string) *model.Priority {
 func (s *Store) IssueTypes() []model.IssueType {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	ids := make([]string, 0, len(s.types))
-	for id := range s.types {
-		ids = append(ids, id)
-	}
-	sort.Strings(ids)
-	out := make([]model.IssueType, 0, len(ids))
-	for _, id := range ids {
-		out = append(out, locale.OverlayIssueType(s.loc, *s.types[id]))
+	list := s.typesLocked()
+	out := make([]model.IssueType, 0, len(list))
+	for _, t := range list {
+		out = append(out, locale.OverlayIssueType(s.loc, *t))
 	}
 	return out
 }
@@ -1769,7 +1712,7 @@ func (s *Store) IssueTypes() []model.IssueType {
 func (s *Store) IssueType(id string) *model.IssueType {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	t := s.types[id]
+	t := s.typeByIDLocked(id)
 	if t == nil {
 		return nil
 	}
@@ -1781,14 +1724,10 @@ func (s *Store) IssueType(id string) *model.IssueType {
 func (s *Store) Resolutions() []model.Resolution {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	ids := make([]string, 0, len(s.resolutions))
-	for id := range s.resolutions {
-		ids = append(ids, id)
-	}
-	sort.Strings(ids)
-	out := make([]model.Resolution, 0, len(ids))
-	for _, id := range ids {
-		out = append(out, locale.OverlayResolution(s.loc, *s.resolutions[id]))
+	list := s.resolutionsLocked()
+	out := make([]model.Resolution, 0, len(list))
+	for _, r := range list {
+		out = append(out, locale.OverlayResolution(s.loc, *r))
 	}
 	return out
 }
@@ -1797,8 +1736,9 @@ func (s *Store) Resolutions() []model.Resolution {
 func (s *Store) Fields() []model.FieldInfo {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	out := make([]model.FieldInfo, 0, len(s.fields))
-	for _, f := range s.fields {
+	fields := s.fieldsLocked()
+	out := make([]model.FieldInfo, 0, len(fields))
+	for _, f := range fields {
 		out = append(out, locale.OverlayField(s.loc, f))
 	}
 	return out
@@ -1808,21 +1748,16 @@ func (s *Store) Fields() []model.FieldInfo {
 func (s *Store) Filters() []model.Filter {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	out := append([]model.Filter{}, s.filters...)
-	return out
+	return s.filtersLocked()
 }
 
 // Users lists unique users.
 func (s *Store) Users() []model.User {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	seen := map[string]bool{}
-	var out []model.User
-	for _, u := range s.users {
-		if seen[u.AccountID] {
-			continue
-		}
-		seen[u.AccountID] = true
+	list := s.usersLocked()
+	out := make([]model.User, 0, len(list))
+	for _, u := range list {
 		out = append(out, *u)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].DisplayName < out[j].DisplayName })
@@ -1833,11 +1768,11 @@ func (s *Store) Users() []model.User {
 func (s *Store) User(ref string) *model.User {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	if u := s.users[ref]; u != nil {
+	if u := s.userByKeyLocked(ref); u != nil {
 		cp := *u
 		return &cp
 	}
-	if u := s.usersByEmail[strings.ToLower(ref)]; u != nil {
+	if u := s.userByEmailLocked(ref); u != nil {
 		cp := *u
 		return &cp
 	}
@@ -1848,7 +1783,7 @@ func (s *Store) User(ref string) *model.User {
 func (s *Store) UserByEmail(email string) *model.User {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	if u := s.usersByEmail[strings.ToLower(email)]; u != nil {
+	if u := s.userByEmailLocked(email); u != nil {
 		cp := *u
 		return &cp
 	}
@@ -1861,15 +1796,10 @@ func (s *Store) SearchUsers(query string, max int) []model.User {
 	defer s.mu.RUnlock()
 	q := strings.ToLower(query)
 	var out []model.User
-	seen := map[string]bool{}
-	for _, u := range s.users {
-		if seen[u.AccountID] {
-			continue
-		}
+	for _, u := range s.usersLocked() {
 		if q == "" || strings.Contains(strings.ToLower(u.DisplayName), q) ||
 			strings.Contains(strings.ToLower(u.Email), q) ||
 			strings.Contains(strings.ToLower(u.Name), q) {
-			seen[u.AccountID] = true
 			out = append(out, *u)
 		}
 	}
@@ -1901,7 +1831,7 @@ func (s *Store) Spaces(globalOnly bool) []model.Space {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	var out []model.Space
-	for _, sp := range s.spaces {
+	for _, sp := range s.spacesLocked() {
 		if globalOnly && sp.Type != "global" {
 			continue
 		}
@@ -1915,7 +1845,7 @@ func (s *Store) Spaces(globalOnly bool) []model.Space {
 func (s *Store) Space(key string) *model.Space {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	sp := s.spaces[key]
+	sp := s.spaceByKeyLocked(key)
 	if sp == nil {
 		return nil
 	}
@@ -1927,7 +1857,7 @@ func (s *Store) Space(key string) *model.Space {
 func (s *Store) Page(id string) *model.Page {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	p := s.pages[id]
+	p := s.pageByIDLocked(id)
 	if p == nil {
 		return nil
 	}
@@ -1939,8 +1869,9 @@ func (s *Store) Page(id string) *model.Page {
 func (s *Store) Pages() []model.Page {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	out := make([]model.Page, 0, len(s.pages))
-	for _, p := range s.pages {
+	list := s.pagesLocked()
+	out := make([]model.Page, 0, len(list))
+	for _, p := range list {
 		out = append(out, *p)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
@@ -1951,7 +1882,7 @@ func (s *Store) Pages() []model.Page {
 func (s *Store) ChildComments(contentID string) []model.PageComment {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return append([]model.PageComment{}, s.pageComments[contentID]...)
+	return s.pageCommentsLocked(contentID)
 }
 
 // SearchPages evaluates CQL.
@@ -1964,13 +1895,13 @@ func (s *Store) SearchPages(cqlText string) ([]model.Page, error) {
 	}
 	var out []model.Page
 	if q.Type == "comment" {
-		for pid, cms := range s.pageComments {
-			pg := s.pages[pid]
+		for _, pid := range s.pageCommentParentIDsLocked() {
+			pg := s.pageByIDLocked(pid)
 			space := ""
 			if pg != nil {
 				space = pg.SpaceKey
 			}
-			for _, cm := range cms {
+			for _, cm := range s.pageCommentsLocked(pid) {
 				if !cql.MatchComment(q, space, cm.When) {
 					continue
 				}
@@ -1993,7 +1924,7 @@ func (s *Store) SearchPages(cqlText string) ([]model.Page, error) {
 			}
 		}
 	} else {
-		for _, p := range s.pages {
+		for _, p := range s.pagesLocked() {
 			if cql.MatchPage(q, p) {
 				out = append(out, *p)
 			}
@@ -2032,12 +1963,12 @@ func (s *Store) CreatePage(in PageWrite) (*model.Page, error) {
 	if title == "" {
 		return nil, fmt.Errorf("title is required")
 	}
-	if in.SpaceKey == "" || s.spaces[in.SpaceKey] == nil {
+	if in.SpaceKey == "" || s.spaceByKeyLocked(in.SpaceKey) == nil {
 		return nil, fmt.Errorf("No space found with key: %s", in.SpaceKey)
 	}
 	var ancestors []string
 	if in.ParentID != "" {
-		parent := s.pages[in.ParentID]
+		parent := s.pageByIDLocked(in.ParentID)
 		if parent == nil {
 			return nil, fmt.Errorf("No content found with id: %s", in.ParentID)
 		}
@@ -2065,7 +1996,7 @@ func (s *Store) CreatePage(in PageWrite) (*model.Page, error) {
 		Ancestors: ancestors, Versions: []model.PageVersion{ver},
 		WebUI: fmt.Sprintf("/spaces/%s/pages/%s", in.SpaceKey, id),
 	}
-	s.pages[id] = pg
+	s.putPageLocked(pg)
 	err = s.markDirtyLocked()
 	cp := *pg
 	return &cp, err
@@ -2076,7 +2007,7 @@ func (s *Store) CreatePage(in PageWrite) (*model.Page, error) {
 func (s *Store) UpdatePage(id string, in PageWrite) (*model.Page, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	pg := s.pages[id]
+	pg := s.pageByIDLocked(id)
 	if pg == nil {
 		return nil, errNotFound("page", id)
 	}
@@ -2091,11 +2022,11 @@ func (s *Store) UpdatePage(id string, in PageWrite) (*model.Page, error) {
 	if title == "" {
 		return nil, fmt.Errorf("title is required")
 	}
-	if in.SpaceKey != "" && s.spaces[in.SpaceKey] == nil {
+	if in.SpaceKey != "" && s.spaceByKeyLocked(in.SpaceKey) == nil {
 		return nil, fmt.Errorf("No space found with key: %s", in.SpaceKey)
 	}
 	if in.ParentID != "" {
-		if in.ParentID != pg.ID && s.pages[in.ParentID] == nil {
+		if in.ParentID != pg.ID && s.pageByIDLocked(in.ParentID) == nil {
 			return nil, fmt.Errorf("No content found with id: %s", in.ParentID)
 		}
 		pg.Ancestors = []string{in.ParentID}
@@ -2126,6 +2057,7 @@ func (s *Store) UpdatePage(id string, in PageWrite) (*model.Page, error) {
 		Number: want, When: when, AuthorID: author,
 		Message: in.Message, MinorEdit: in.MinorEdit,
 	})
+	s.putPageLocked(pg)
 	err := s.markDirtyLocked()
 	cp := *pg
 	return &cp, err
@@ -2136,7 +2068,7 @@ func (s *Store) UpdatePage(id string, in PageWrite) (*model.Page, error) {
 func (s *Store) PageVersions(id string) ([]model.PageVersion, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	pg := s.pages[id]
+	pg := s.pageByIDLocked(id)
 	if pg == nil {
 		return nil, errNotFound("page", id)
 	}
@@ -2202,8 +2134,8 @@ func parseADF(raw json.RawMessage) (json.RawMessage, string, error) {
 func (s *Store) AttachmentBytes(id string) ([]byte, *model.Attachment) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	b := s.attachBytes[id]
-	for _, iss := range s.issues {
+	b, _ := s.attachBytesLocked(id)
+	for _, iss := range s.allIssuesLocked() {
 		for i := range iss.Attachments {
 			if iss.Attachments[i].ID == id {
 				a := iss.Attachments[i]
@@ -2219,11 +2151,12 @@ func (s *Store) AttachmentBytes(id string) ([]byte, *model.Attachment) {
 func (s *Store) AttachmentByMedia(media string) ([]byte, *model.Attachment) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	for _, iss := range s.issues {
+	for _, iss := range s.allIssuesLocked() {
 		for i := range iss.Attachments {
 			if iss.Attachments[i].MediaID == media {
 				a := iss.Attachments[i]
-				return s.attachBytes[a.ID], &a
+				b, _ := s.attachBytesLocked(a.ID)
+				return b, &a
 			}
 		}
 	}
@@ -2236,22 +2169,14 @@ func (s *Store) AttachmentByMedia(media string) ([]byte, *model.Attachment) {
 func (s *Store) Transitions(key string) []model.Transition {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	iss := s.issues[key]
-	if iss == nil {
-		for _, it := range s.issues {
-			if it.ID == key {
-				iss = it
-				break
-			}
-		}
-	}
+	iss := s.issueLocked(key)
 	if iss == nil {
 		return nil
 	}
 	ids := s.destinationIDsLocked(iss.StatusID)
 	out := make([]model.Transition, 0, len(ids))
 	for i, id := range ids {
-		st := locale.OverlayStatus(s.loc, *s.statuses[id])
+		st := locale.OverlayStatus(s.loc, *s.statusByIDLocked(id))
 		out = append(out, model.Transition{
 			ID: strconv.Itoa(i + 1), Name: st.Name, ToID: id,
 		})
@@ -2260,13 +2185,12 @@ func (s *Store) Transitions(key string) []model.Transition {
 }
 
 func (s *Store) destinationIDsLocked(fromStatus string) []string {
-	ids := make([]string, 0, len(s.statuses))
-	for id := range s.statuses {
+	var ids []string
+	for _, id := range s.statusIDsLocked() {
 		if id != fromStatus {
 			ids = append(ids, id)
 		}
 	}
-	sort.Strings(ids)
 	return ids
 }
 
@@ -2280,7 +2204,7 @@ func (s *Store) TransitionScreenFields(toStatusID string) map[string]any {
 
 func (s *Store) transitionScreenFieldsLocked(toStatusID string) map[string]any {
 	out := map[string]any{}
-	screen, ok := s.transitionScreens[toStatusID]
+	screen, ok := s.transitionScreenLocked(toStatusID)
 	if !ok {
 		return out
 	}
@@ -2315,14 +2239,10 @@ func (s *Store) transitionFieldMetaLocked(id string, spec fixtures.TransitionScr
 }
 
 func (s *Store) resolutionAllowedValuesLocked() []any {
-	ids := make([]string, 0, len(s.resolutions))
-	for id := range s.resolutions {
-		ids = append(ids, id)
-	}
-	sort.Strings(ids)
+	ids := s.resolutionIDsLocked()
 	out := make([]any, 0, len(ids))
 	for _, id := range ids {
-		r := locale.OverlayResolution(s.loc, *s.resolutions[id])
+		r := locale.OverlayResolution(s.loc, *s.resolutionByIDLocked(id))
 		out = append(out, map[string]any{"id": r.ID, "name": r.Name})
 	}
 	return out
@@ -2339,13 +2259,14 @@ func (s *Store) Transition(key, transitionID string) error {
 func (s *Store) ApplyTransition(key, transitionID, authorID string, fields, update map[string]any) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	iss := s.issues[key]
+	iss := s.issueByKeyLocked(key)
 	if iss == nil {
 		return errNotFound("issue", key)
 	}
 	if err := s.applyTransitionLocked(iss, transitionID, authorID, fields, update); err != nil {
 		return err
 	}
+	s.putIssueLocked(iss)
 	return s.markDirtyLocked()
 }
 
@@ -2362,7 +2283,7 @@ func (s *Store) applyTransitionLocked(iss *model.Issue, transitionID, authorID s
 	}
 	to := ids[idx-1]
 	from := iss.StatusID
-	screen := s.transitionScreens[to]
+	screen, _ := s.transitionScreenLocked(to)
 
 	if err := rejectFieldsNotOnScreen(fields, screen); err != nil {
 		return err
@@ -2378,7 +2299,7 @@ func (s *Store) applyTransitionLocked(iss *model.Issue, transitionID, authorID s
 	var setResolution *string
 	if raw, ok := fields["resolution"]; ok {
 		id := pickID(raw)
-		if id == "" || s.resolutions[id] == nil {
+		if id == "" || s.resolutionByIDLocked(id) == nil {
 			return FieldError{Field: "resolution", Msg: "Specified resolution is not valid."}
 		}
 		setResolution = &id
@@ -2389,14 +2310,14 @@ func (s *Store) applyTransitionLocked(iss *model.Issue, transitionID, authorID s
 	if setResolution != nil {
 		iss.ResolutionID = *setResolution
 	}
-	if s.statuses[to] != nil && s.statuses[to].StatusCategory.Key != "done" {
+	if stTo := s.statusByIDLocked(to); stTo != nil && stTo.StatusCategory.Key != "done" {
 		iss.ResolutionID = ""
 	}
 	// Cloud workflows fill a default resolution via a post-function when
 	// entering done if the request (and screen) did not supply one.
 	// Existing fixtures, persist files, and gadak conformance depend on
 	// this remaining 10000. Required screens never reach here empty.
-	if s.statuses[to] != nil && s.statuses[to].StatusCategory.Key == "done" && iss.ResolutionID == "" {
+	if stTo := s.statusByIDLocked(to); stTo != nil && stTo.StatusCategory.Key == "done" && iss.ResolutionID == "" {
 		iss.ResolutionID = "10000"
 	}
 	s.seqHist++
@@ -2531,7 +2452,7 @@ func (s *Store) AddComment(key, authorID string, body []byte) (model.Comment, er
 func (s *Store) WriteComment(key, authorID string, in CommentWrite) (model.Comment, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	iss := s.issues[key]
+	iss := s.issueByKeyLocked(key)
 	if iss == nil {
 		return model.Comment{}, errNotFound("issue", key)
 	}
@@ -2541,6 +2462,7 @@ func (s *Store) WriteComment(key, authorID string, in CommentWrite) (model.Comme
 	}
 	jsd := jsdPublicFromProperties(in.Properties)
 	cm := s.addCommentLocked(iss, authorID, in.Body, vis, jsd)
+	s.putIssueLocked(iss)
 	return cm, s.markDirtyLocked()
 }
 
@@ -2610,7 +2532,7 @@ func (s *Store) addCommentLocked(iss *model.Issue, authorID string, body []byte,
 func (s *Store) AddPageComment(pageID, authorID string, body json.RawMessage) (model.PageComment, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	pg := s.pages[pageID]
+	pg := s.pageByIDLocked(pageID)
 	if pg == nil {
 		return model.PageComment{}, errNotFound("page", pageID)
 	}
@@ -2625,7 +2547,7 @@ func (s *Store) AddPageComment(pageID, authorID string, body json.RawMessage) (m
 		When:     formatConfluenceWhen(s.clk, ""),
 		AuthorID: s.userOrDefault(authorID).AccountID,
 	}
-	s.pageComments[pageID] = append(s.pageComments[pageID], cm)
+	s.appendPageCommentLocked(pageID, cm)
 	return cm, s.markDirtyLocked()
 }
 
@@ -2634,11 +2556,12 @@ func (s *Store) AddPageComment(pageID, authorID string, body json.RawMessage) (m
 func (s *Store) SetAssignee(key, accountID, authorID string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	iss := s.issues[key]
+	iss := s.issueByKeyLocked(key)
 	if iss == nil {
 		return errNotFound("issue", key)
 	}
 	s.setAssigneeLocked(iss, accountID, authorID)
+	s.putIssueLocked(iss)
 	return s.markDirtyLocked()
 }
 
@@ -2694,7 +2617,7 @@ type ClaimResult struct {
 func (s *Store) Claim(key, actorID, transitionID string, takeOver bool) (ClaimResult, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	iss := s.issues[key]
+	iss := s.issueByKeyLocked(key)
 	if iss == nil {
 		return ClaimResult{}, errNotFound("issue", key)
 	}
@@ -2719,6 +2642,7 @@ func (s *Store) Claim(key, actorID, transitionID string, takeOver bool) (ClaimRe
 		if iss.AssigneeID != actorID {
 			s.setAssigneeLocked(iss, actorID, actorID)
 		}
+		s.putIssueLocked(iss)
 		if err := s.markDirtyLocked(); err != nil {
 			return ClaimResult{}, err
 		}
@@ -2727,14 +2651,14 @@ func (s *Store) Claim(key, actorID, transitionID string, takeOver bool) (ClaimRe
 	if res.ClaimedAt == "" {
 		res.ClaimedAt = iss.Updated
 	}
-	if u, ok := s.users[iss.AssigneeID]; ok {
+	if u := s.userByAccountLocked(iss.AssigneeID); u != nil {
 		res.Assignee = *u
 	} else {
 		res.Assignee = model.User{
 			AccountID: iss.AssigneeID, DisplayName: s.displayFor("assignee", iss.AssigneeID),
 		}
 	}
-	if st := s.statuses[iss.StatusID]; st != nil {
+	if st := s.statusByIDLocked(iss.StatusID); st != nil {
 		res.Status = *st
 	} else {
 		res.Status = model.Status{ID: iss.StatusID, Name: iss.StatusID}
@@ -2745,7 +2669,7 @@ func (s *Store) Claim(key, actorID, transitionID string, takeOver bool) (ClaimRe
 // issueInProgressLocked reports whether the issue's status category is
 // indeterminate (Jira's in-progress category; the key is locale-stable).
 func (s *Store) issueInProgressLocked(iss *model.Issue) bool {
-	st := s.statuses[iss.StatusID]
+	st := s.statusByIDLocked(iss.StatusID)
 	return st != nil && st.StatusCategory.Key == "indeterminate"
 }
 
@@ -2755,7 +2679,7 @@ func (s *Store) issueInProgressLocked(iss *model.Issue) bool {
 func (s *Store) firstInProgressTransitionLocked(iss *model.Issue) string {
 	ids := s.destinationIDsLocked(iss.StatusID)
 	for i, id := range ids {
-		if st := s.statuses[id]; st != nil && st.StatusCategory.Key == "indeterminate" {
+		if st := s.statusByIDLocked(id); st != nil && st.StatusCategory.Key == "indeterminate" {
 			return strconv.Itoa(i + 1)
 		}
 	}
@@ -2789,7 +2713,7 @@ func (s *Store) UpdateFields(key string, fields map[string]any) error {
 func (s *Store) UpdateIssue(key string, fields, update map[string]any) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	iss := s.issues[key]
+	iss := s.issueByKeyLocked(key)
 	if iss == nil {
 		return errNotFound("issue", key)
 	}
@@ -2857,6 +2781,7 @@ func (s *Store) UpdateIssue(key string, fields, update map[string]any) error {
 		}
 	}
 	iss.Updated = clock.Format(s.clk.Tick())
+	s.putIssueLocked(iss)
 	return s.markDirtyLocked()
 }
 
@@ -3062,7 +2987,7 @@ func (s *Store) resolveNamedLocked(project, field string, item any, extra []mode
 
 func (s *Store) projectNamedCatalogLocked(project, field string) []model.Named {
 	seen := map[string]model.Named{}
-	for _, iss := range s.issues {
+	for _, iss := range s.allIssuesLocked() {
 		if project != "" && iss.ProjectKey != project {
 			continue
 		}
@@ -3203,7 +3128,7 @@ func (s *Store) CreateIssue(fields map[string]any, reporterID string) (*model.Is
 	if strings.TrimSpace(summary) == "" {
 		return nil, FieldError{Field: "summary", Msg: "You must specify a summary of the issue."}
 	}
-	if _, ok := s.projects[project]; !ok {
+	if s.projectByKeyLocked(project) == nil {
 		s.putProject(fixtures.Project{Key: project, Name: project})
 	}
 	typeID := first(pickID(fields["issuetype"]), "10003")
@@ -3269,14 +3194,14 @@ func (s *Store) CreateIssue(fields map[string]any, reporterID string) (*model.Is
 		}
 		iss.Custom[k] = v
 	}
-	s.issues[key] = iss
+	s.putIssueLocked(iss)
 	return iss, s.markDirtyLocked()
 }
 
 func (s *Store) nextKeyNum(project string) int {
 	max := 0
 	prefix := project + "-"
-	for k := range s.issues {
+	for _, k := range s.issueKeysLocked() {
 		if !strings.HasPrefix(k, prefix) {
 			continue
 		}
@@ -3292,7 +3217,7 @@ func (s *Store) nextKeyNum(project string) int {
 func (s *Store) AddAttachment(key, filename, mime, authorID string, body []byte) (model.Attachment, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	iss := s.issues[key]
+	iss := s.issueByKeyLocked(key)
 	if iss == nil {
 		return model.Attachment{}, errNotFound("issue", key)
 	}
@@ -3301,7 +3226,7 @@ func (s *Store) AddAttachment(key, filename, mime, authorID string, body []byte)
 	}
 	s.seqAttach++
 	id := strconv.Itoa(70000 + s.seqAttach)
-	s.attachBytes[id] = body
+	s.putAttachBytesLocked(id, body)
 	a := model.Attachment{
 		ID: id, Filename: filename, MimeType: mime, Size: int64(len(body)),
 		Author: *s.userOrDefault(authorID), Created: clock.Format(s.clk.Tick()),
@@ -3309,6 +3234,7 @@ func (s *Store) AddAttachment(key, filename, mime, authorID string, body []byte)
 	}
 	iss.Attachments = append(iss.Attachments, a)
 	iss.Updated = a.Created
+	s.putIssueLocked(iss)
 	return a, s.markDirtyLocked()
 }
 
@@ -3369,20 +3295,12 @@ func validParentLevel(parentLevel, childLevel int) bool {
 }
 
 func (s *Store) issueByParentRefLocked(ref string) *model.Issue {
-	if iss := s.issues[ref]; iss != nil {
-		return iss
-	}
-	for _, iss := range s.issues {
-		if iss.ID == ref {
-			return iss
-		}
-	}
-	return nil
+	return s.issueLocked(ref)
 }
 
 func (s *Store) typeNameAtLevelLocked(level int) string {
 	var best *model.IssueType
-	for _, t := range s.types {
+	for _, t := range s.typesLocked() {
 		if t.HierarchyLevel != level {
 			continue
 		}
@@ -3408,11 +3326,11 @@ func (s *Store) resolveParentLocked(childTypeID, parentRef string) (string, erro
 	if parent == nil {
 		return "", fmt.Errorf("parent %s does not exist", parentRef)
 	}
-	childType := s.types[childTypeID]
+	childType := s.typeByIDLocked(childTypeID)
 	if childType == nil {
 		return "", fmt.Errorf("unknown issue type %s", childTypeID)
 	}
-	parentType := s.types[parent.IssueTypeID]
+	parentType := s.typeByIDLocked(parent.IssueTypeID)
 	if parentType == nil {
 		return "", fmt.Errorf("parent %s has unknown issue type %s", parent.Key, parent.IssueTypeID)
 	}
@@ -3601,12 +3519,7 @@ func (s *Store) Snapshot() fixtures.Doc {
 // which already holds the write lock.
 func (s *Store) snapshotLocked() fixtures.Doc {
 	d := fixtures.Doc{Seed: s.seed, Locale: string(s.loc)}
-	seenU := map[string]bool{}
-	for _, u := range s.users {
-		if seenU[u.AccountID] {
-			continue
-		}
-		seenU[u.AccountID] = true
+	for _, u := range s.usersLocked() {
 		active := u.Active
 		d.Users = append(d.Users, fixtures.User{
 			AccountID: u.AccountID, Name: u.Name, Key: u.Key,
@@ -3615,34 +3528,32 @@ func (s *Store) snapshotLocked() fixtures.Doc {
 		})
 	}
 	sort.Slice(d.Users, func(i, j int) bool { return d.Users[i].AccountID < d.Users[j].AccountID })
-	for _, p := range s.projects {
+	for _, p := range s.projectsLocked() {
 		d.Projects = append(d.Projects, fixtures.Project{
 			ID: p.ID, Key: p.Key, Name: p.Name, TypeKey: p.TypeKey, Style: p.Style,
 		})
 	}
 	sort.Slice(d.Projects, func(i, j int) bool { return d.Projects[i].Key < d.Projects[j].Key })
-	for _, st := range s.statuses {
+	for _, st := range s.statusesLocked() {
 		d.Statuses = append(d.Statuses, fixtures.Status{ID: st.ID, Name: st.Name, Category: st.StatusCategory.Key})
 	}
 	sort.Slice(d.Statuses, func(i, j int) bool { return d.Statuses[i].ID < d.Statuses[j].ID })
-	for _, p := range s.priorities {
+	for _, p := range s.prioritiesLocked() {
 		d.Priorities = append(d.Priorities, fixtures.Priority{ID: p.ID, Name: p.Name})
 	}
-	for _, t := range s.types {
+	for _, t := range s.typesLocked() {
 		d.IssueTypes = append(d.IssueTypes, fixtures.IssueType{
 			ID: t.ID, Name: t.Name, HierarchyLevel: t.HierarchyLevel, Subtask: t.Subtask,
 		})
 	}
 	sort.Slice(d.IssueTypes, func(i, j int) bool { return d.IssueTypes[i].ID < d.IssueTypes[j].ID })
-	d.Fields = fixtureFieldsFromStore(s.fields)
+	d.Fields = fixtureFieldsFromStore(s.fieldsLocked())
 	sort.Slice(d.Fields, func(i, j int) bool { return d.Fields[i].ID < d.Fields[j].ID })
-	screenIDs := make([]string, 0, len(s.transitionScreens))
-	for id := range s.transitionScreens {
-		screenIDs = append(screenIDs, id)
-	}
-	sort.Strings(screenIDs)
-	for _, id := range screenIDs {
-		src := s.transitionScreens[id]
+	for _, id := range s.transitionScreenIDsLocked() {
+		src, ok := s.transitionScreenLocked(id)
+		if !ok {
+			continue
+		}
 		fields := make(map[string]fixtures.TransitionScreenField, len(src))
 		for k, v := range src {
 			fields[k] = v
@@ -3651,27 +3562,16 @@ func (s *Store) snapshotLocked() fixtures.Doc {
 			Status: id, Fields: fields,
 		})
 	}
-	keys := make([]string, 0, len(s.issues))
-	for k := range s.issues {
-		keys = append(keys, k)
+	for _, iss := range s.allIssuesLocked() {
+		d.Issues = append(d.Issues, s.issueToFix(iss))
 	}
-	sort.Strings(keys)
-	for _, k := range keys {
-		d.Issues = append(d.Issues, s.issueToFix(s.issues[k]))
-	}
-	for _, sp := range s.spaces {
+	for _, sp := range s.spacesLocked() {
 		d.Spaces = append(d.Spaces, fixtures.Space{
 			ID: sp.ID, Key: sp.Key, Name: sp.Name, Type: sp.Type, Homepage: sp.HomepageID,
 		})
 	}
 	sort.Slice(d.Spaces, func(i, j int) bool { return d.Spaces[i].Key < d.Spaces[j].Key })
-	pids := make([]string, 0, len(s.pages))
-	for id := range s.pages {
-		pids = append(pids, id)
-	}
-	sort.Strings(pids)
-	for _, id := range pids {
-		p := s.pages[id]
+	for _, p := range s.pagesLocked() {
 		fp := fixtures.Page{
 			ID: p.ID, Type: p.Type, Status: p.Status, Title: p.Title, Space: p.SpaceKey,
 			Version: p.Version, When: p.When, Author: p.AuthorID, Body: p.BodyText, Labels: p.Labels,
@@ -3685,7 +3585,7 @@ func (s *Store) snapshotLocked() fixtures.Doc {
 				Message: v.Message, MinorEdit: v.MinorEdit,
 			})
 		}
-		for _, cm := range s.pageComments[id] {
+		for _, cm := range s.pageCommentsLocked(p.ID) {
 			fp.Comments = append(fp.Comments, fixtures.PageComment{
 				ID: cm.ID, Author: cm.AuthorID, Body: cm.BodyText, When: cm.When,
 			})
@@ -3735,7 +3635,7 @@ func (s *Store) issueToFix(iss *model.Issue) fixtures.Issue {
 			ID: a.ID, Filename: a.Filename, MimeType: a.MimeType,
 			Author: a.Author.AccountID, Created: a.Created,
 		}
-		if body, ok := s.attachBytes[a.ID]; ok && len(body) > 0 {
+		if body, ok := s.attachBytesLocked(a.ID); ok && len(body) > 0 {
 			if text, readable := readableText(body); readable {
 				fa.Text = text
 			} else {
@@ -3803,27 +3703,14 @@ func (s *Store) Counts() map[string]int {
 	defer s.mu.RUnlock()
 	comments := 0
 	hist := 0
-	for _, iss := range s.issues {
+	for _, iss := range s.allIssuesLocked() {
 		comments += len(iss.Comments)
 		hist += len(iss.Histories)
 	}
-	pages := len(s.pages)
-	pcom := 0
-	for _, c := range s.pageComments {
-		pcom += len(c)
-	}
-	users := 0
-	seen := map[string]bool{}
-	for _, u := range s.users {
-		if !seen[u.AccountID] {
-			seen[u.AccountID] = true
-			users++
-		}
-	}
 	return map[string]int{
-		"projects": len(s.projects), "issues": len(s.issues),
+		"projects": s.projectCountLocked(), "issues": s.issueCountLocked(),
 		"comments": comments, "changelog": hist,
-		"spaces": len(s.spaces), "pages": pages, "pageComments": pcom,
-		"users": users, "statuses": len(s.statuses),
+		"spaces": s.spaceCountLocked(), "pages": s.pageCountLocked(), "pageComments": s.pageCommentCountLocked(),
+		"users": s.userCountLocked(), "statuses": s.statusCountLocked(),
 	}
 }

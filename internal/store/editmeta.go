@@ -352,13 +352,7 @@ func (s *Store) upsertField(f fixtures.Field) {
 	for _, o := range f.Options {
 		info.Options = append(info.Options, model.FieldOption{ID: o.ID, Value: o.Value})
 	}
-	for i, existing := range s.fields {
-		if existing.ID == f.ID {
-			s.fields[i] = info
-			return
-		}
-	}
-	s.fields = append(s.fields, info)
+	s.putFieldLocked(info)
 }
 
 func fixtureFieldsFromStore(fields []model.FieldInfo) []fixtures.Field {
@@ -379,15 +373,7 @@ func fixtureFieldsFromStore(fields []model.FieldInfo) []fixtures.Field {
 	return out
 }
 
-func (s *Store) fieldByIDLocked(id string) *model.FieldInfo {
-	for i := range s.fields {
-		if s.fields[i].ID == id {
-			cp := s.fields[i]
-			return &cp
-		}
-	}
-	return nil
-}
+
 
 func (s *Store) validateCustomWriteLocked(id string, v any) error {
 	f := s.fieldByIDLocked(id)
@@ -553,8 +539,9 @@ type FieldRegistryRow struct {
 func (s *Store) FieldRegistry() []FieldRegistryRow {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	out := make([]FieldRegistryRow, 0, len(s.fields))
-	for _, f := range s.fields {
+	fields := s.fieldsLocked()
+	out := make([]FieldRegistryRow, 0, len(fields))
+	for _, f := range fields {
 		kind := fieldKind(f)
 		if !f.Custom {
 			kind = f.Schema.System

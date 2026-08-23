@@ -158,7 +158,7 @@ func (s *Store) actorAliasLocked(slug string) string {
 // exceptAccountID already shows name as its display name. Call with s.mu
 // held.
 func (s *Store) displayNameTakenLocked(name, exceptAccountID string) bool {
-	for _, u := range s.users {
+	for _, u := range s.usersLocked() {
 		if u.AccountID != exceptAccountID && u.DisplayName == name {
 			return true
 		}

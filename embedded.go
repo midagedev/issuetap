@@ -23,11 +23,13 @@ import (
 // EmbeddedConfig is everything an embedding program can set. Every field
 // is optional; zero values give the same defaults as `issuetap serve`.
 //
-// Load order at startup: when PersistPath names an existing file, that
-// file is the initial graph (it is a later state of whatever fixture the
-// run started from) and the fixture fields are skipped. Otherwise
-// FixturePath, then FixtureBytes, seeds the graph. Locale, when non-empty,
-// wins over a fixture's `locale:` field.
+// Load order at startup: when PersistPath names an existing SQLite state
+// file, that file is the initial graph (it is a later state of whatever
+// fixture the run started from) and the fixture fields are skipped.
+// Otherwise FixturePath, then FixtureBytes, seeds the graph and the DB
+// is created at PersistPath. A PersistPath that is legacy YAML is refused
+// (pass it as FixturePath). Locale, when non-empty, wins over a fixture's
+// `locale:` field.
 type EmbeddedConfig struct {
 	Seed            int64         // determinism seed (0 → 1)
 	Locale          string        // "" | en | ko | ja | de
@@ -37,8 +39,8 @@ type EmbeddedConfig struct {
 	Token           string        // accepted secret ("" = any non-empty)
 	FixturePath     string        // YAML/JSON fixture file to seed from
 	FixtureBytes    []byte        // fixture contents when FixturePath is empty
-	PersistPath     string        // write-through state file (see store.Options)
-	PersistDebounce time.Duration // quiet window before a write (0 → 1s)
+	PersistPath     string        // on-disk SQLite state file (see store.Options)
+	PersistDebounce time.Duration // retained; no-op (writes commit before return)
 	WallClock       bool          // stamp records with wall time, not the seed clock (see store.Options)
 	// PriorityLocaleTrap opts back into the `serve --locale` deviation:
 	// localized priority names. Zero is the embedded role — a real tracker
@@ -75,6 +77,14 @@ func NewEmbedded(cfg EmbeddedConfig) (*Embedded, error) {
 		Email:   cfg.Email,
 		Token:   cfg.Token,
 	}
+	persistLoaded := false
+	if cfg.PersistPath != "" {
+		if _, err := os.Stat(cfg.PersistPath); err == nil {
+			persistLoaded = true
+		} else if !errors.Is(err, fs.ErrNotExist) {
+			return nil, fmt.Errorf("persist %s: %w", cfg.PersistPath, err)
+		}
+	}
 	st, err := store.Open(store.Options{
 		Seed: seed, Locale: loc,
 		PersistPath: cfg.PersistPath, PersistDebounce: cfg.PersistDebounce,
@@ -85,14 +95,6 @@ func NewEmbedded(cfg EmbeddedConfig) (*Embedded, error) {
 	})
 	if err != nil {
 		return nil, err
-	}
-	persistLoaded := false
-	if cfg.PersistPath != "" {
-		if _, err := os.Stat(cfg.PersistPath); err == nil {
-			persistLoaded = true
-		} else if !errors.Is(err, fs.ErrNotExist) {
-			return nil, fmt.Errorf("persist %s: %w", cfg.PersistPath, err)
-		}
 	}
 	if !persistLoaded {
 		var doc fixtures.Doc
@@ -164,8 +166,8 @@ func (e *Embedded) Snapshot() ([]byte, error) {
 	return fixtures.MarshalYAML(e.st.Snapshot())
 }
 
-// Close flushes write-through persistence (when armed) and stops the
-// debounce timer. Always call before dropping the Embedded value.
+// Close checkpoints on-disk persistence (when armed). Always call
+// before dropping the Embedded value.
 func (e *Embedded) Close() error {
 	return e.st.Close()
 }

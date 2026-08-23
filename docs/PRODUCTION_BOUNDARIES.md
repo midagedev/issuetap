@@ -6,13 +6,13 @@ Issuetap is a local testbed. It must never be mistaken for a real Jira.
 
 - Every response carries `X-Issuetap: 1`.
 - `GET /rest/api/3/serverInfo` returns `serverTitle: "issuetap"`.
-- The working copy is in-memory. A process restart drops the graph unless
-  `--persist <file>` is set or a fixture is re-applied. `issuetap serve
-  --persist` writes that file before returning 2xx for a mutation.
-  `--persist-debounce` is lab-only.
+- The working copy is process-local SQLite. A process restart drops the
+  graph unless `--persist <file>` is set or a fixture is re-applied.
+  `issuetap serve --persist` commits that SQLite file before returning 2xx
+  for a mutation. `--persist-debounce` is a no-op.
 - There is no outbound network. Issuetap cannot reach a real site, a
   mailer, or a webhook consumer on its own.
-- Writes mutate the in-memory graph (and the optional persist file). They
+- Writes mutate the SQLite graph (and the optional persist file). They
   do not create work in anyone's real project.
 - Auth is whatever `--email` / `--token` you passed, or *any* non-empty
   Basic/Bearer pair by default. That is convenient for tests and fatal

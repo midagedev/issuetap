@@ -11,22 +11,6 @@ import (
 	"github.com/midagedev/issuetap/internal/locale"
 )
 
-// waitForFile polls until the persistence layer has written the file.
-func waitForFile(t *testing.T, path string) []byte {
-	t.Helper()
-	deadline := time.Now().Add(2 * time.Second)
-	for {
-		b, err := os.ReadFile(path)
-		if err == nil && len(b) > 0 {
-			return b
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("persistence file %s not written within 2s", path)
-		}
-		time.Sleep(5 * time.Millisecond)
-	}
-}
-
 // TestMutationSurvivesRestart is the persistence contract: a mutation made
 // through the store, with no manual snapshot, is still there when a new
 // store opens the same persistence file. FAIL-first 2026-08-17: before
@@ -72,9 +56,8 @@ func TestMutationSurvivesRestart(t *testing.T) {
 	}
 }
 
-// TestDebouncedAutoWrite: mutations reach disk without Flush/Close — the
-// debounce timer does the writing, so a hard kill loses at most one
-// window.
+// TestDebouncedAutoWrite: mutations reach disk without Flush/Close.
+// PersistDebounce is a no-op; ACK is the write.
 func TestDebouncedAutoWrite(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "state.yaml")
 	st, err := Open(Options{Seed: 1, Locale: locale.EN, PersistPath: path, PersistDebounce: 20 * time.Millisecond})
@@ -89,14 +72,20 @@ func TestDebouncedAutoWrite(t *testing.T) {
 	if err := st.Apply(doc); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := st.CreateIssue(map[string]any{
+	iss, err := st.CreateIssue(map[string]any{
 		"project": map[string]any{"key": "TAP"}, "summary": "debounced",
-	}, ""); err != nil {
+	}, "")
+	if err != nil {
 		t.Fatal(err)
 	}
-	b := waitForFile(t, path)
-	if !strings.Contains(string(b), "debounced") {
-		t.Fatalf("persisted file does not contain the created issue:\n%s", b)
+	st2, err := Open(Options{Seed: 1, Locale: locale.EN, PersistPath: path})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st2.Close()
+	got := st2.Issue(iss.Key)
+	if got == nil || got.Summary != "debounced" {
+		t.Fatalf("ACK'd issue missing on reopen without Close: %+v", got)
 	}
 }
 
@@ -121,13 +110,6 @@ func TestCloseFlushesDirtyState(t *testing.T) {
 	if err := st.Close(); err != nil {
 		t.Fatal(err)
 	}
-	b, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("Close did not flush: %v", err)
-	}
-	if !strings.Contains(string(b), "TAP-1") {
-		t.Fatal("flushed file missing TAP-1")
-	}
 	st2, err := Open(Options{Seed: 1, Locale: locale.EN, PersistPath: path})
 	if err != nil {
 		t.Fatal(err)
@@ -138,10 +120,9 @@ func TestCloseFlushesDirtyState(t *testing.T) {
 	}
 }
 
-// TestPersistedFileIsAtomic: the write path is temp-file + rename, so a
-// reader never observes a partial document. Observable proxy: every write
-// replaces the file with a fully parseable document. (The atomicity
-// itself is structural — same-directory rename.)
+// TestPersistedFileIsAtomic: SQLite/WAL commits are the persist path.
+// Observable proxy: after a burst of writes the export Snapshot is a
+// parseable YAML fixture and a fresh Open serves the graph.
 func TestPersistedFileIsAtomic(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "state.yaml")
 	st, err := Open(Options{Seed: 1, Locale: locale.EN, PersistPath: path, PersistDebounce: 10 * time.Millisecond})
@@ -160,13 +141,21 @@ func TestPersistedFileIsAtomic(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	st.Close()
-	b, err := os.ReadFile(path)
+	b, err := fixtures.MarshalYAML(st.Snapshot())
 	if err != nil {
 		t.Fatal(err)
 	}
 	if _, err := fixtures.Parse(b, ".yaml"); err != nil {
-		t.Fatalf("persisted file is not a parseable fixture: %v", err)
+		t.Fatalf("Snapshot is not a parseable fixture: %v", err)
+	}
+	st.Close()
+	st2, err := Open(Options{Seed: 1, Locale: locale.EN, PersistPath: path})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st2.Close()
+	if n := len(st2.Issue("TAP-1").Comments); n < 20 {
+		t.Fatalf("reopened TAP-1 comments=%d, want ≥20", n)
 	}
 }
 
@@ -262,8 +251,9 @@ func TestPersistCorruptFileFailsLoud(t *testing.T) {
 	}
 }
 
-// persistPathAsDir turns path into a directory so writeAtomic's rename
-// cannot replace it. Used to inject a persist write failure.
+// persistPathAsDir turns path into a directory. YAML write-through used
+// this to fail a rename; the live SQLite connection keeps the fd so a
+// later mutation still commits.
 func persistPathAsDir(t *testing.T, path string) {
 	t.Helper()
 	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
@@ -271,20 +261,6 @@ func persistPathAsDir(t *testing.T, path string) {
 	}
 	if err := os.Mkdir(path, 0o755); err != nil {
 		t.Fatal(err)
-	}
-}
-
-func waitForPersistErr(t *testing.T, st *Store) error {
-	t.Helper()
-	deadline := time.Now().Add(2 * time.Second)
-	for {
-		if err := st.PersistErr(); err != nil {
-			return err
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("PersistErr stayed nil; persist write did not fail")
-		}
-		time.Sleep(5 * time.Millisecond)
 	}
 }
 
@@ -297,9 +273,10 @@ func loadTinyDoc(t *testing.T) fixtures.Doc {
 	return doc
 }
 
-// TestFlushWritesLatestAndSurfacesError: Flush persists pending mutations
-// immediately (no debounce wait) and returns the write error when the
-// path cannot be replaced. PersistErr matches that failure.
+// TestFlushWritesLatestAndSurfacesError: Flush is a WAL checkpoint.
+// Mutations are already on disk before Flush; a sibling Open sees them.
+// Replacing the path with a directory after Open no longer fails the
+// live connection (the fd is held) — Open of a directory is the error.
 func TestFlushWritesLatestAndSurfacesError(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "state.yaml")
 	st, err := Open(Options{Seed: 1, Locale: locale.EN, PersistPath: path, PersistDebounce: time.Hour})
@@ -310,41 +287,40 @@ func TestFlushWritesLatestAndSurfacesError(t *testing.T) {
 	if err := st.Apply(loadTinyDoc(t)); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := st.CreateIssue(map[string]any{
+	iss, err := st.CreateIssue(map[string]any{
 		"project": map[string]any{"key": "TAP"}, "summary": "flush-latest",
-	}, ""); err != nil {
+	}, "")
+	if err != nil {
 		t.Fatal(err)
 	}
 	if err := st.Flush(); err != nil {
 		t.Fatal(err)
 	}
-	b, err := os.ReadFile(path)
+	st2, err := Open(Options{Seed: 1, Locale: locale.EN, PersistPath: path})
 	if err != nil {
-		t.Fatalf("Flush did not write: %v", err)
+		t.Fatalf("Flush did not leave a readable DB: %v", err)
 	}
-	if !strings.Contains(string(b), "flush-latest") {
-		t.Fatalf("flushed file missing latest mutation:\n%s", b)
+	defer st2.Close()
+	got := st2.Issue(iss.Key)
+	if got == nil || got.Summary != "flush-latest" {
+		t.Fatalf("flushed DB missing latest mutation: %+v", got)
 	}
 	if err := st.PersistErr(); err != nil {
 		t.Fatalf("PersistErr after successful Flush: %v", err)
 	}
 
-	persistPathAsDir(t, path)
-	if _, err := st.AddComment("TAP-1", "", []byte("flush-fail")); err != nil {
+	dirPath := filepath.Join(t.TempDir(), "not-a-db")
+	if err := os.Mkdir(dirPath, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := st.Flush(); err == nil {
-		t.Fatal("expected Flush to return the persist write error")
-	}
-	if st.PersistErr() == nil {
-		t.Fatal("expected PersistErr after Flush failure")
+	if _, err := Open(Options{PersistPath: dirPath}); err == nil {
+		t.Fatal("expected Open of a directory PersistPath to fail")
 	}
 }
 
-// TestPersistRetriesAfterFailureWithoutMutation: a failed background
-// persist must rearm itself. After the path is writable again, the file
-// appears with no further mutation. FAIL-first 2026-08-20: flushPersist
-// stored the error, kept dirty, and set timer=nil, so this timed out.
+// TestPersistRetriesAfterFailureWithoutMutation: YAML write-through
+// retried a failed rename. Stage 3 has no debounce retry — ACK is the
+// SQL commit — so a sibling Open without further mutation sees the write.
 func TestPersistRetriesAfterFailureWithoutMutation(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "state.yaml")
 	st, err := Open(Options{Seed: 1, Locale: locale.EN, PersistPath: path, PersistDebounce: 20 * time.Millisecond})
@@ -355,26 +331,22 @@ func TestPersistRetriesAfterFailureWithoutMutation(t *testing.T) {
 	if err := st.Apply(loadTinyDoc(t)); err != nil {
 		t.Fatal(err)
 	}
-	if err := st.Flush(); err != nil {
-		t.Fatal(err)
-	}
-
-	persistPathAsDir(t, path)
 	if _, err := st.AddComment("TAP-1", "", []byte("retry-after-fail")); err != nil {
 		t.Fatal(err)
 	}
-	waitForPersistErr(t, st)
-
-	if err := os.Remove(path); err != nil {
+	st2, err := Open(Options{Seed: 1, Locale: locale.EN, PersistPath: path})
+	if err != nil {
 		t.Fatal(err)
 	}
-
-	b := waitForFile(t, path)
-	if !strings.Contains(string(b), "retry-after-fail") {
-		t.Fatalf("retried persist missing mutation:\n%s", b)
+	defer st2.Close()
+	found := false
+	for _, c := range st2.Issue("TAP-1").Comments {
+		if c.BodyText == "retry-after-fail" {
+			found = true
+		}
 	}
-	if err := st.PersistErr(); err != nil {
-		t.Fatalf("PersistErr after successful retry: %v", err)
+	if !found {
+		t.Fatal("ACK'd comment missing on sibling Open; debounce retry is gone")
 	}
 }
 
@@ -390,26 +362,37 @@ func TestNegativeDebounceWritesBeforeReturn(t *testing.T) {
 	if err := st.Apply(loadTinyDoc(t)); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := st.CreateIssue(map[string]any{
+	iss, err := st.CreateIssue(map[string]any{
 		"project": map[string]any{"key": "TAP"}, "summary": "sync-now",
-	}, ""); err != nil {
+	}, "")
+	if err != nil {
 		t.Fatal(err)
 	}
-	b, err := os.ReadFile(path)
+	st2, err := Open(Options{Seed: 1, Locale: locale.EN, PersistPath: path})
 	if err != nil {
 		t.Fatalf("negative debounce did not write before return: %v", err)
 	}
-	if !strings.Contains(string(b), "sync-now") {
-		t.Fatalf("sync persist missing mutation:\n%s", b)
+	defer st2.Close()
+	got := st2.Issue(iss.Key)
+	if got == nil || got.Summary != "sync-now" {
+		t.Fatalf("sync persist missing mutation: %+v", got)
 	}
 }
 
-// TestDurablePersistFailureReturnsFromMutation: PersistDebounce < 0 writes
-// on the mutation call, so a persist-path failure is the mutation's error
-// — not a successful return with a silent PersistErr. The in-memory
-// change is kept (no rollback). FAIL-first GDK-346.
+// TestDurablePersistFailureReturnsFromMutation: YAML write-through could
+// fail a rename after the graph mutation (PersistError, in-memory kept).
+// Stage 3's working copy is the file: a directory PersistPath fails at
+// Open, and a live handle's SQL commit is the ACK (no split-brain).
 func TestDurablePersistFailureReturnsFromMutation(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "state.yaml")
+	dirPath := filepath.Join(t.TempDir(), "state.yaml")
+	if err := os.Mkdir(dirPath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Open(Options{Seed: 1, Locale: locale.EN, PersistPath: dirPath, PersistDebounce: -1}); err == nil {
+		t.Fatal("expected Open of a directory PersistPath to fail")
+	}
+
+	path := filepath.Join(t.TempDir(), "state.db")
 	st, err := Open(Options{Seed: 1, Locale: locale.EN, PersistPath: path, PersistDebounce: -1})
 	if err != nil {
 		t.Fatal(err)
@@ -418,76 +401,130 @@ func TestDurablePersistFailureReturnsFromMutation(t *testing.T) {
 	if err := st.Apply(loadTinyDoc(t)); err != nil {
 		t.Fatal(err)
 	}
-
-	persistPathAsDir(t, path)
 	iss, err := st.CreateIssue(map[string]any{
-		"project": map[string]any{"key": "TAP"}, "summary": "durable-fail",
+		"project": map[string]any{"key": "TAP"}, "summary": "durable-ok",
 	}, "")
-	if err == nil {
-		t.Fatal("expected durable persist failure from CreateIssue; mutation succeeded")
+	if err != nil {
+		t.Fatalf("file-backed CreateIssue: %v", err)
 	}
-	if !IsPersist(err) {
-		t.Fatalf("want PersistError, got %T %v", err, err)
+	st2, err := Open(Options{Seed: 1, Locale: locale.EN, PersistPath: path})
+	if err != nil {
+		t.Fatal(err)
 	}
-	msg := err.Error()
-	if !strings.Contains(msg, "in memory") || !strings.Contains(msg, "retry") {
-		t.Fatalf("persist error must say the change stayed in memory and will retry: %q", msg)
-	}
-	if iss == nil || iss.Summary != "durable-fail" {
-		t.Fatalf("in-memory issue missing after persist failure: %+v", iss)
-	}
-	if got := st.Issue(iss.Key); got == nil || got.Summary != "durable-fail" {
-		t.Fatal("mutation was rolled back; persist failure must keep in-memory state")
-	}
-	if st.PersistErr() == nil {
-		t.Fatal("expected PersistErr after durable flush failure")
+	defer st2.Close()
+	if got := st2.Issue(iss.Key); got == nil || got.Summary != "durable-ok" {
+		t.Fatalf("ACK'd issue missing on reopen: %+v", got)
 	}
 }
 
 // TestDurablePersistFailureAllMutations is the markDirtyLocked census:
-// every mutation must return PersistError in durable mode, not nil.
+// every mutation commits before return so a sibling Open without Close
+// sees it. (YAML-era: each returned PersistError when the rename failed.)
 func TestDurablePersistFailureAllMutations(t *testing.T) {
 	adf := []byte(`{"type":"doc","version":1,"content":[]}`)
 	cases := []struct {
 		name string
 		fn   func(*Store) error
+		see  func(*testing.T, *Store)
 	}{
 		{"CreateIssue", func(st *Store) error {
 			_, err := st.CreateIssue(map[string]any{
 				"project": map[string]any{"key": "TAP"}, "summary": "census",
 			}, "")
 			return err
+		}, func(t *testing.T, st2 *Store) {
+			found := false
+			for _, iss := range st2.Snapshot().Issues {
+				if iss.Summary == "census" {
+					found = true
+				}
+			}
+			if !found {
+				t.Fatal("CreateIssue not visible on sibling Open")
+			}
 		}},
 		{"UpdateIssue", func(st *Store) error {
 			return st.UpdateIssue("TAP-1", map[string]any{"summary": "census"}, nil)
+		}, func(t *testing.T, st2 *Store) {
+			if iss := st2.Issue("TAP-1"); iss == nil || iss.Summary != "census" {
+				t.Fatalf("UpdateIssue not visible: %+v", iss)
+			}
 		}},
 		{"AddComment", func(st *Store) error {
 			_, err := st.AddComment("TAP-1", "", []byte("census"))
 			return err
+		}, func(t *testing.T, st2 *Store) {
+			iss := st2.Issue("TAP-1")
+			if iss == nil {
+				t.Fatal("TAP-1 missing")
+			}
+			ok := false
+			for _, c := range iss.Comments {
+				if c.BodyText == "census" {
+					ok = true
+				}
+			}
+			if !ok {
+				t.Fatal("AddComment not visible on sibling Open")
+			}
 		}},
 		{"SetAssignee", func(st *Store) error {
 			return st.SetAssignee("TAP-1", "5b10a2844c20165700ede21g", "")
+		}, func(t *testing.T, st2 *Store) {
+			if iss := st2.Issue("TAP-1"); iss == nil || iss.AssigneeID != "5b10a2844c20165700ede21g" {
+				t.Fatalf("SetAssignee not visible: %+v", st2.Issue("TAP-1"))
+			}
 		}},
 		{"Transition", func(st *Store) error {
 			return st.Transition("TAP-1", "1")
+		}, func(t *testing.T, st2 *Store) {
+			if st2.Issue("TAP-1") == nil {
+				t.Fatal("TAP-1 missing after Transition")
+			}
 		}},
 		{"AddAttachment", func(st *Store) error {
 			_, err := st.AddAttachment("TAP-1", "a.txt", "text/plain", "", []byte("hi"))
 			return err
+		}, func(t *testing.T, st2 *Store) {
+			if st2.Issue("TAP-1") == nil || len(st2.Issue("TAP-1").Attachments) == 0 {
+				t.Fatal("AddAttachment not visible on sibling Open")
+			}
 		}},
 		{"CreatePage", func(st *Store) error {
 			_, err := st.CreatePage(PageWrite{Title: "census", SpaceKey: "DOCS", BodyADF: adf})
 			return err
+		}, func(t *testing.T, st2 *Store) {
+			found := false
+			for _, p := range st2.Snapshot().Pages {
+				if p.Title == "census" {
+					found = true
+				}
+			}
+			if !found {
+				t.Fatal("CreatePage not visible on sibling Open")
+			}
 		}},
 		{"UpdatePage", func(st *Store) error {
 			_, err := st.UpdatePage("20001", PageWrite{Title: "Welcome to the lab", Next: 2, BodyADF: adf})
 			return err
+		}, func(t *testing.T, st2 *Store) {
+			if st2.Page("20001") == nil {
+				t.Fatal("page 20001 missing after UpdatePage")
+			}
 		}},
 		{"Apply", func(st *Store) error {
 			return st.Apply(loadTinyDoc(t))
+		}, func(t *testing.T, st2 *Store) {
+			if st2.Issue("TAP-1") == nil {
+				t.Fatal("Apply not visible on sibling Open")
+			}
 		}},
 		{"SetLocale", func(st *Store) error {
 			return st.SetLocale(locale.KO)
+		}, func(t *testing.T, st2 *Store) {
+			if st2.Locale() != locale.KO {
+				t.Fatalf("SetLocale not visible: %s", st2.Locale())
+			}
 		}},
 	}
 	for _, tc := range cases {
@@ -501,21 +538,23 @@ func TestDurablePersistFailureAllMutations(t *testing.T) {
 			if err := st.Apply(loadTinyDoc(t)); err != nil {
 				t.Fatal(err)
 			}
-			persistPathAsDir(t, path)
-			err = tc.fn(st)
-			if err == nil {
-				t.Fatalf("%s succeeded; durable persist failure must return", tc.name)
+			if err := tc.fn(st); err != nil {
+				t.Fatalf("%s: %v", tc.name, err)
 			}
-			if !IsPersist(err) {
-				t.Fatalf("%s: want PersistError, got %T %v", tc.name, err, err)
+			st2, err := Open(Options{Seed: 1, Locale: locale.EN, PersistPath: path})
+			if err != nil {
+				t.Fatal(err)
 			}
+			defer st2.Close()
+			tc.see(t, st2)
 		})
 	}
 }
 
-// TestDebouncedPersistFailureDoesNotFailMutation: async persist still
-// returns nil from the mutation (backoff retry). Locks the durable
-// error-return so it does not leak onto the debounce path.
+// TestDebouncedPersistFailureDoesNotFailMutation: YAML debounce returned
+// nil from the mutation while persist retried. Stage 3 commits SQL
+// before return, so the mutation still succeeds even if the path name
+// is replaced after Open (the live connection holds the fd).
 func TestDebouncedPersistFailureDoesNotFailMutation(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "state.yaml")
 	st, err := Open(Options{Seed: 1, Locale: locale.EN, PersistPath: path, PersistDebounce: time.Hour})

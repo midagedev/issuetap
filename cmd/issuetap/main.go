@@ -79,13 +79,15 @@ Flags for serve:
   --email         accepted Basic user (empty = any)
   --token         accepted Basic password / Bearer PAT (empty = any non-empty)
   --scenario      scenario file to apply (faults + locale) on start
-  --persist       write-through state file: mutations are saved (atomic
-                  replace) before the HTTP response returns, and reloaded
-                  on restart. When the file exists it supersedes --fixture
-                  and the scenario fixture; delete it to reseed from the
-                  fixture.
-  --persist-debounce  lab-only quiet window before writing --persist
-                  (e.g. 1s). Omitted means write before the response returns.
+  --persist       on-disk SQLite state file (recommended .db). Mutations
+                  commit before the HTTP response returns, and the file is
+                  the working copy on restart. When the file exists it
+                  supersedes --fixture and the scenario fixture; delete it
+                  to reseed from the fixture. A legacy YAML persist file
+                  is refused — pass it as --fixture and set --persist to a
+                  new .db.
+  --persist-debounce  retained for flag compatibility; no-op (writes
+                  always commit before the response returns).
 `)
 }
 
@@ -101,8 +103,8 @@ func cmdServe(args []string) error {
 	email := fs.String("email", cfg.Email, "accepted Basic user")
 	token := fs.String("token", cfg.Token, "accepted token")
 	scenario := fs.String("scenario", "", "scenario file to apply on start")
-	persist := fs.String("persist", cfg.Snapshot, "write-through persistence file (ISSUETAP_SNAPSHOT)")
-	persistDebounce := fs.Duration("persist-debounce", 0, "lab-only quiet window before writing --persist; omitted writes the file before the HTTP response returns")
+	persist := fs.String("persist", cfg.Snapshot, "on-disk SQLite persistence file (ISSUETAP_SNAPSHOT)")
+	persistDebounce := fs.Duration("persist-debounce", 0, "retained; no-op (writes always commit before the HTTP response returns)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -149,44 +151,35 @@ func cmdServe(args []string) error {
 	if err == http.ErrServerClosed {
 		err = nil
 	}
-	// Flush write-through persistence after the listener is down.
+	// Checkpoint on-disk persistence after the listener is down.
 	if cerr := st.Close(); err == nil {
 		err = cerr
 	}
 	return err
 }
 
-// loadServeGraph is the serve bootstrap: New → Apply fixture → optional
-// scenario (faults + scenario locale). With persist set and an existing
-// state file, the persisted graph is loaded instead (it is by definition
-// a later state of the same fixture) and the scenario fixture is skipped;
-// scenario faults and locale still apply. When localeFromCLI is true
-// (--locale or ISSUETAP_LOCALE), that locale is applied last so it wins
-// over the fixture locale: field.
+// loadServeGraph is the serve bootstrap: Open persist (if any) → Apply
+// fixture → optional scenario (faults + scenario locale). With persist
+// set and an existing SQLite state file, that file is the graph (it is
+// by definition a later state of the same fixture) and the scenario
+// fixture is skipped; scenario faults and locale still apply. When
+// localeFromCLI is true (--locale or ISSUETAP_LOCALE), that locale is
+// applied last so it wins over the fixture locale: field.
 func loadServeGraph(cfg config.Config, scenarioPath string, localeFromCLI bool, persist string, persistDebounce time.Duration) (*store.Store, *faults.Engine, error) {
-	if persistDebounce == 0 {
-		// serve --persist default: durable-before-return (store treats
-		// negative as write-on-mutation). --persist-debounce is lab-only.
-		persistDebounce = -1
-	}
-	st := store.New(store.Options{
-		Seed: cfg.Seed, Locale: cfg.Locale,
-		PersistPath: persist, PersistDebounce: persistDebounce,
-	})
 	loadedPersist := false
 	if persist != "" {
 		if _, err := os.Stat(persist); err == nil {
-			doc, err := fixtures.Load(persist)
-			if err != nil {
-				return nil, nil, fmt.Errorf("--persist %s: %w", persist, err)
-			}
-			if err := st.Apply(doc); err != nil {
-				return nil, nil, fmt.Errorf("--persist %s: %w", persist, err)
-			}
 			loadedPersist = true
 		} else if !os.IsNotExist(err) {
 			return nil, nil, fmt.Errorf("--persist %s: %w", persist, err)
 		}
+	}
+	st, err := store.Open(store.Options{
+		Seed: cfg.Seed, Locale: cfg.Locale,
+		PersistPath: persist, PersistDebounce: persistDebounce,
+	})
+	if err != nil {
+		return nil, nil, err
 	}
 	if !loadedPersist && cfg.Fixture != "" {
 		doc, err := fixtures.Load(cfg.Fixture)

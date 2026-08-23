@@ -5,11 +5,13 @@
 - Public embedding surface: `issuetap.NewEmbedded` (root package) serves
   the full surface in-process with fixture seeding (path or bytes),
   `Snapshot()` export, and `Close`. No internal types in the API.
-- Write-through persistence: `--persist <file>` (serve) or
-  `EmbeddedConfig.PersistPath`. Mutations are debounced (default 1s) to an
-  atomic same-directory rename and reloaded on restart, which also
-  re-seeds id sequences and advances the deterministic clock past the
-  loaded rows.
+- On-disk SQLite persistence: `--persist <file>` (serve) or
+  `EmbeddedConfig.PersistPath` names a WAL database (recommended `.db`).
+  Mutations commit before return; a restart reopens the file. YAML is
+  fixture seed and `Snapshot()` export only. Legacy YAML PersistPath is
+  refused (pass it as FixturePath). `PersistDebounce` is a no-op. Restart
+  still re-seeds id sequences and advances the deterministic clock past
+  the loaded rows.
 - Attachment bytes survive snapshot/restore: printable UTF-8 content
   snapshots inline as `text:`, binary as `dataBase64:`; the
   `/file/{uuid}/binary` download target now serves the stored bytes

@@ -1,18 +1,26 @@
-// SQLite is the process-local working copy of the store graph (F′ stage 0,
-// gadak GDK-660). Durable bytes are still the YAML persist document:
-// Apply loads YAML into these tables; mutations write SQL then re-emit
-// YAML through writePersistLocked. The on-disk .db cutover is stage 3.
+// SQLite is the store graph (F′ stage 3 / gadak GDK-202). PersistPath
+// names an on-disk WAL database; that file is the working copy. YAML is
+// the seed and Snapshot() export format, not the durable write path.
+// Without PersistPath the working copy stays process-local (:memory:).
 //
 // Blobs are JSON with wrappers for model fields that carry `json:"-"`
 // (issue links, attachment MediaID, FieldInfo.Options, Filter.Owner,
 // Priority.Rank). gob is not used: it collapses a pointer to the zero
 // value (*bool false on Comment.JsdPublic) to nil.
+//
+// persistSchemaVersion is PRAGMA user_version. It is persist bookkeeping,
+// not entity normalization: a mismatch is refused, never migrated in
+// this round. store_meta holds seed/locale/timezone so a restart restores
+// them without a YAML document.
 package store
 
 import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"io"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 
@@ -21,6 +29,13 @@ import (
 
 	_ "modernc.org/sqlite"
 )
+
+// persistSchemaVersion is this binary's on-disk schema stamp
+// (PRAGMA user_version). Bump only with a migration; this round refuses
+// any other value.
+const persistSchemaVersion = 1
+
+const sqliteMagic = "SQLite format 3\x00"
 
 // memSeq names each :memory: database so two Store values never share a
 // working copy. cache=shared keeps the unique name stable across the
@@ -110,10 +125,15 @@ CREATE TABLE attachments (
   id TEXT PRIMARY KEY,
   bytes BLOB NOT NULL
 );
+
+CREATE TABLE store_meta (
+  k TEXT PRIMARY KEY,
+  v TEXT NOT NULL
+);
 `
 
 func openWorkingDB() *sql.DB {
-	name := fmt.Sprintf("file:issuetap-%d?mode=memory&cache=shared", memSeq.Add(1))
+	name := fmt.Sprintf("file:issuetap-%d?mode=memory&cache=shared&_pragma=busy_timeout(5000)&_pragma=foreign_keys(1)", memSeq.Add(1))
 	db, err := sql.Open("sqlite", name)
 	if err != nil {
 		panic("store sqlite open: " + err.Error())
@@ -127,6 +147,127 @@ func openWorkingDB() *sql.DB {
 		panic("store sqlite schema: " + err.Error())
 	}
 	return db
+}
+
+// persistDSN is the on-disk Open DSN. Matches the gadak mirror family:
+// WAL, busy_timeout(5000), foreign_keys, synchronous=NORMAL, immediate
+// transactions so a read-then-write cannot upgrade a deferred lock.
+func persistDSN(path string) string {
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		abs = path
+	}
+	return "file:" + abs + "?" + strings.Join([]string{
+		"_pragma=busy_timeout(5000)",
+		"_pragma=journal_mode(WAL)",
+		"_pragma=foreign_keys(1)",
+		"_pragma=synchronous(NORMAL)",
+		"_txlock=immediate",
+	}, "&")
+}
+
+func persistYAMLError(path string) error {
+	return fmt.Errorf("persist %s: file is not an issuetap SQLite state database; if this is a legacy YAML persist file, pass it as FixturePath and set PersistPath to a new .db file", path)
+}
+
+func persistSchemaError(path string, have, want int) error {
+	return fmt.Errorf("persist %s: schema_version %d (this build reads %d)", path, have, want)
+}
+
+func isSQLiteFile(path string) (bool, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return false, err
+	}
+	defer f.Close()
+	var hdr [16]byte
+	n, err := io.ReadFull(f, hdr[:])
+	if err == io.EOF || err == io.ErrUnexpectedEOF {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if n < 16 {
+		return false, nil
+	}
+	return string(hdr[:]) == sqliteMagic, nil
+}
+
+func inspectPersistPath(path string) error {
+	fi, err := os.Stat(path)
+	if err != nil {
+		return err
+	}
+	if fi.IsDir() {
+		return fmt.Errorf("persist %s: is a directory", path)
+	}
+	ok, err := isSQLiteFile(path)
+	if err != nil {
+		return fmt.Errorf("persist %s: %w", path, err)
+	}
+	if !ok {
+		return persistYAMLError(path)
+	}
+	return nil
+}
+
+func configureFileDB(db *sql.DB) {
+	db.SetMaxOpenConns(1)
+	db.SetMaxIdleConns(1)
+}
+
+func createFileDB(path string) (*sql.DB, error) {
+	db, err := sql.Open("sqlite", persistDSN(path))
+	if err != nil {
+		return nil, fmt.Errorf("persist: open %s: %w", path, err)
+	}
+	configureFileDB(db)
+	if err := db.Ping(); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("persist: ping %s: %w", path, err)
+	}
+	if _, err := db.Exec(workingSchema); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("persist: schema %s: %w", path, err)
+	}
+	if _, err := db.Exec(fmt.Sprintf("PRAGMA user_version = %d", persistSchemaVersion)); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("persist: user_version %s: %w", path, err)
+	}
+	return db, nil
+}
+
+func openExistingFileDB(path string) (*sql.DB, error) {
+	db, err := sql.Open("sqlite", persistDSN(path))
+	if err != nil {
+		return nil, fmt.Errorf("persist: open %s: %w", path, err)
+	}
+	configureFileDB(db)
+	if err := db.Ping(); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("persist: ping %s: %w", path, err)
+	}
+	var have int
+	if err := db.QueryRow("PRAGMA user_version").Scan(&have); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("persist: schema_version %s: %w", path, err)
+	}
+	if have != persistSchemaVersion {
+		db.Close()
+		return nil, persistSchemaError(path, have, persistSchemaVersion)
+	}
+	var tbl string
+	err = db.QueryRow(`SELECT name FROM sqlite_master WHERE type='table' AND name='issues'`).Scan(&tbl)
+	if err == sql.ErrNoRows {
+		db.Close()
+		return nil, persistSchemaError(path, have, persistSchemaVersion)
+	}
+	if err != nil {
+		db.Close()
+		return nil, fmt.Errorf("persist: inspect %s: %w", path, err)
+	}
+	return db, nil
 }
 
 func jsonEncode(v any) []byte {
@@ -279,7 +420,7 @@ func encodeIssue(iss *model.Issue) []byte {
 		Labels: iss.Labels, Components: iss.Components, FixVersions: iss.FixVersions,
 		Versions: iss.Versions, Duedate: iss.Duedate, ResolutionID: iss.ResolutionID,
 		Created: iss.Created, Updated: iss.Updated,
-		DevPRs: iss.DevPRs,
+		DevPRs:         iss.DevPRs,
 		DevDeployments: iss.DevDeployments, DevBuilds: iss.DevBuilds,
 		Histories: iss.Histories, Custom: iss.Custom,
 	}
@@ -313,7 +454,7 @@ func decodeIssue(b []byte) model.Issue {
 		Labels: st.Labels, Components: st.Components, FixVersions: st.FixVersions,
 		Versions: st.Versions, Duedate: st.Duedate, ResolutionID: st.ResolutionID,
 		Created: st.Created, Updated: st.Updated,
-		DevPRs: st.DevPRs,
+		DevPRs:         st.DevPRs,
 		DevDeployments: st.DevDeployments, DevBuilds: st.DevBuilds,
 		Histories: st.Histories, Custom: st.Custom,
 	}

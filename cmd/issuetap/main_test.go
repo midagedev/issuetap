@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -46,9 +45,19 @@ func TestServeFixtureLocaleWhenFlagOmitted(t *testing.T) {
 
 func TestServePersistFileSupersedesFixture(t *testing.T) {
 	dir := t.TempDir()
-	path := filepath.Join(dir, "state.yaml")
-	seed := "issues:\n  - key: PER-1\n    summary: persisted state\n"
-	if err := os.WriteFile(path, []byte(seed), 0o644); err != nil {
+	path := filepath.Join(dir, "state.db")
+	seed, err := fixtures.Parse([]byte("issues:\n  - key: PER-1\n    summary: persisted state\n"), ".yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	prep, err := store.Open(store.Options{Seed: 1, Locale: locale.EN, PersistPath: path})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := prep.Apply(seed); err != nil {
+		t.Fatal(err)
+	}
+	if err := prep.Close(); err != nil {
 		t.Fatal(err)
 	}
 	cfg := config.Default()
@@ -130,8 +139,8 @@ func TestServePersistDefaultWritesBeforeHTTP2xx(t *testing.T) {
 	}
 }
 
-// GDK-584: --persist-debounce is the lab-only delayed write. A 2xx must
-// not imply the file already contains the mutation.
+// GDK-584 / GDK-202: --persist-debounce is a no-op. A 2xx implies the
+// persist file already contains the mutation.
 func TestServePersistDebounceFlagDelaysWrite(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "state.yaml")
 	cfg := config.Default()
@@ -182,7 +191,7 @@ func TestServePersistDebounceFlagDelaysWrite(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer st2.Close()
-	if st2.Issue(key) != nil {
-		t.Fatalf("lab debounce wrote %s before the quiet window; persist must wait", key)
+	if st2.Issue(key) == nil {
+		t.Fatalf("PersistDebounce is a no-op; %s must be on disk at HTTP 2xx", key)
 	}
 }

@@ -12,7 +12,7 @@ developing and testing Jira and Confluence clients. It serves Cloud v3
 fixture apply/snapshot, first-class fault scenarios, localized display
 names, a Svelte dashboard, and a diagnostics bundle. The root package
 `issuetap` is a public embedding contract (in-process handler with
-opt-in write-through persistence) so another Go program can use it as
+opt-in on-disk SQLite persistence) so another Go program can use it as
 its origin store.
 
 It is not an issue tracker.

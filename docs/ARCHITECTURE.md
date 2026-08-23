@@ -7,7 +7,7 @@ cmd/issuetap          serve / fixtures / scenario / diagnose
 embedded.go           public embedding surface (package issuetap)
 internal/
   api                 HTTP: Cloud v3, DC v2, /wiki, /api lab surface
-  store               in-memory graph, snapshot/restore, opt-in persistence
+  store               SQLite graph, YAML snapshot/restore, opt-in on-disk persist
   fixtures            YAML/JSON document
   jql / cql           the query subsets gadak actually sends
   locale              display-name overlay (ids stay put)
@@ -21,13 +21,15 @@ web/                  Svelte lab dashboard, built into dist/app
 
 ## Storage
 
-In-memory. Snapshot/restore is a fixture document. There is no database.
-Determinism is the point; durability is opt-in: `--persist <file>` (or
-`EmbeddedConfig.PersistPath`) saves every mutation to one YAML file
-written atomically (same-directory temp file + rename) and reloads it on
-the next start. `serve --persist` writes before the HTTP response returns;
-a debounced quiet window is lab-only (`--persist-debounce`, or a positive
-`PersistDebounce` in embed). A restart also re-seeds the id sequences and jumps the
+The working copy is SQLite (entity rows + JSON blobs). Without
+`--persist` it is process-local (`:memory:`). With `--persist <file>`
+(recommended `.db`, or `EmbeddedConfig.PersistPath`) that file is the
+working copy: every mutation commits before the call returns, and a
+restart opens the same database. YAML is the seed (fixture) and
+`Snapshot()` export format — not the durable write path. A PersistPath
+that is legacy YAML is refused; pass it as `--fixture` / `FixturePath`
+and point PersistPath at a new `.db`. `PersistDebounce` is retained and
+is a no-op. A restart also re-seeds the id sequences and jumps the
 deterministic clock past the newest loaded timestamp, so post-restart
 mutations never collide with restored ids or sort before existing rows.
 Deleting the file reseeds from the fixture.

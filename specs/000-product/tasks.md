@@ -12,6 +12,7 @@
 - [x] Secretscan
 - [x] Public embedding surface (`issuetap.NewEmbedded`, root package)
 - [x] Write-through persistence (`--persist`, debounced atomic writes, restart reload)
+- [x] On-disk SQLite persist cutover (WAL, durable-before-return; YAML seed/export only)
 - [x] Attachment bytes survive snapshot/restore (`text` inline / `dataBase64`)
 - [x] Confluence page version history (`GET /wiki/rest/api/content/{id}/version`)
 - [x] Wiki writes (`POST/PUT /wiki/rest/api/content`) with optimistic concurrency and persistable history

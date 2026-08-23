@@ -1,7 +1,8 @@
 // Package store is the deterministic Atlassian graph.
 // Same fixture + same seed → same ids, timestamps, and ordering.
-// The working copy is process-local SQLite (gob-blob tables); durable
-// bytes are still a YAML fixture document via snapshot/restore.
+// The working copy is SQLite (JSON-blob tables). When PersistPath is
+// set, that on-disk WAL database is the working copy; YAML is seed and
+// Snapshot() export only.
 package store
 
 import (
@@ -14,7 +15,6 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
-	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -34,21 +34,22 @@ import (
 // Store is safe for concurrent use.
 type Store struct {
 	mu        sync.RWMutex
-	db        *sql.DB // process-local working copy; YAML persist stays durable
+	db        *sql.DB // :memory: or the PersistPath file (WAL)
 	seed      int64
 	clk       *clock.Clock
 	wallClock bool
 	loc       locale.Code
 	tz        *time.Location
+	tzName    string // fixture/persist timezone string; restored from store_meta
 
 	// prioNamesEnglish is the embedded-role flag: a standalone workspace
 	// is a real tracker, so priority names stay English under every
 	// locale — what a live Cloud site does (gadak GDK-597).
 	prioNamesEnglish bool
 
-	// Sequence counters stay in-process under mu. Stage 0's durable
-	// snapshot is YAML; SQL is the working copy of the graph, not of
-	// the id mint. Clock/persistState also stay here — they are not rows.
+	// Sequence counters stay in-process under mu. They are re-seeded
+	// from max(id) on Open of an existing DB. Clock/locale/seed live
+	// here and, when persist is armed, in store_meta.
 	seqIssue   int
 	seqComment int
 	seqHist    int
@@ -65,13 +66,15 @@ type Store struct {
 type Options struct {
 	Seed   int64
 	Locale locale.Code
-	// PersistPath arms write-through persistence: every mutation is
-	// debounced to this file (atomic temp-file + rename) and Open reloads
-	// it on startup, so a restarted process continues where it left off.
+	// PersistPath arms on-disk SQLite persistence (recommended .db).
+	// When the file exists it is the working copy (fixture skipped by
+	// embedders that honor load order). When it does not, Open creates
+	// it and the caller seeds from a fixture. A non-SQLite file (legacy
+	// YAML persist) is refused — pass that YAML as FixturePath.
 	PersistPath string
-	// PersistDebounce is the quiet window before a write. Zero (with
-	// PersistPath set) means the 1s default; negative means write on every
-	// mutation, before the call returns.
+	// PersistDebounce is retained for API compatibility and is a no-op:
+	// every mutation commits before the call returns (durable-before-return
+	// is the only mode).
 	PersistDebounce time.Duration
 	// WallClock stamps generated records with the machine's wall time
 	// instead of the deterministic seed clock — for a standalone workspace
@@ -86,27 +89,37 @@ type Options struct {
 	PriorityNamesEnglish bool
 }
 
-// DefaultPersistDebounce is the write-through quiet window.
+// DefaultPersistDebounce is retained for API compatibility. PersistDebounce
+// is a no-op; mutations commit before return.
 const DefaultPersistDebounce = time.Second
 
-// persistRetryMax caps the delay between persist retries after consecutive
-// write failures. The first retry uses the debounce window (or
-// DefaultPersistDebounce on the synchronous path).
-const persistRetryMax = 30 * time.Second
-
-// persistState is the write-through engine. Owned by Store.mu.
+// persistState names the on-disk DB. Mutations write SQL on s.db (the
+// file itself); there is no YAML write-through and no debounce timer.
 type persistState struct {
-	path     string
-	debounce time.Duration
-	timer    *time.Timer
-	dirty    bool
-	err      error // last write error; cleared by the next success
-	backoff  time.Duration
+	path string
+	err  error // last checkpoint error, if any
 }
 
 // New returns an empty store with default catalogs. When PersistPath is
-// set, mutations are persisted; use Open to also reload an existing file.
+// set, the working copy is that SQLite file (created if missing). Use
+// Open to surface persist-file errors instead of panicking.
 func New(opt Options) *Store {
+	st, err := openStore(opt)
+	if err != nil {
+		panic("store: " + err.Error())
+	}
+	return st
+}
+
+// Open is New plus persist-file checks: a missing path creates a new DB,
+// an existing SQLite DB is the initial graph, and a non-SQLite file
+// (legacy YAML) is an error naming FixturePath. A corrupt file is an
+// error, never a silent empty store.
+func Open(opt Options) (*Store, error) {
+	return openStore(opt)
+}
+
+func openStore(opt Options) (*Store, error) {
 	if opt.Locale == "" {
 		opt.Locale = locale.EN
 	}
@@ -115,7 +128,6 @@ func New(opt Options) *Store {
 		clk = clock.NewWall()
 	}
 	s := &Store{
-		db:               openWorkingDB(),
 		seed:             opt.Seed,
 		clk:              clk,
 		wallClock:        opt.WallClock,
@@ -123,183 +135,104 @@ func New(opt Options) *Store {
 		prioNamesEnglish: opt.PriorityNamesEnglish,
 		tz:               time.FixedZone("KST", 9*3600),
 	}
-	if opt.PersistPath != "" {
-		debounce := opt.PersistDebounce
-		if debounce == 0 {
-			debounce = DefaultPersistDebounce
-		}
-		if debounce < 0 {
-			debounce = 0
-		}
-		s.persist = &persistState{path: opt.PersistPath, debounce: debounce}
-	}
-	s.installDefaultCatalog()
-	return s
-}
-
-// Open is New plus startup reload: when the persistence file exists it is
-// loaded as the initial graph (in place of any fixture the caller would
-// have applied). A corrupt file is an error, never a silent empty store.
-func Open(opt Options) (*Store, error) {
-	st := New(opt)
 	if opt.PersistPath == "" {
-		return st, nil
+		s.db = openWorkingDB()
+		s.installDefaultCatalog()
+		return s, nil
 	}
+	s.persist = &persistState{path: opt.PersistPath}
 	_, statErr := os.Stat(opt.PersistPath)
 	if statErr != nil {
-		if errors.Is(statErr, fs.ErrNotExist) {
-			return st, nil
+		if !errors.Is(statErr, fs.ErrNotExist) {
+			return nil, fmt.Errorf("persist: stat %s: %w", opt.PersistPath, statErr)
 		}
-		return nil, fmt.Errorf("persist: stat %s: %w", opt.PersistPath, statErr)
+		db, err := createFileDB(opt.PersistPath)
+		if err != nil {
+			return nil, err
+		}
+		s.db = db
+		s.installDefaultCatalog()
+		s.writeMetaLocked()
+		return s, nil
 	}
-	doc, err := fixtures.Load(opt.PersistPath)
+	if err := inspectPersistPath(opt.PersistPath); err != nil {
+		return nil, err
+	}
+	db, err := openExistingFileDB(opt.PersistPath)
 	if err != nil {
-		return nil, fmt.Errorf("persist: load %s: %w", opt.PersistPath, err)
+		return nil, err
 	}
-	if err := st.Apply(doc); err != nil {
-		// A durable flush of the just-loaded graph is not a user mutation.
-		// Open still disarms persist bookkeeping below (load is not dirty).
-		if !IsPersist(err) {
-			return nil, fmt.Errorf("persist: apply %s: %w", opt.PersistPath, err)
-		}
-	}
-	st.mu.Lock()
-	if st.persist.timer != nil { // the load armed the debounce; disarm it
-		st.persist.timer.Stop()
-		st.persist.timer = nil
-	}
-	st.persist.dirty = false // the load itself is not a mutation
-	st.persist.err = nil
-	st.persist.backoff = 0
-	st.mu.Unlock()
-	return st, nil
+	s.db = db
+	s.loadMetaLocked()
+	s.seedSeqsLocked()
+	s.seedClockLocked()
+	return s, nil
 }
 
-// markDirtyLocked arms the debounced write. Called by every mutation.
-// A zero debounce (from PersistDebounce < 0) writes before the mutation
-// returns so a caller can choose durable-before-response. A flush
-// failure in that synchronous mode is returned as PersistError; the
-// in-memory change is kept and a backoff retry remains armed. Debounced
-// mode still returns nil and retries in the background.
+// markDirtyLocked records persist bookkeeping after a mutation. SQL
+// statements have already auto-committed on the file-backed working
+// copy, so ACK is durable. PersistDebounce is ignored.
 func (s *Store) markDirtyLocked() error {
-	p := s.persist
-	if p == nil {
+	if s.persist == nil {
 		return nil
 	}
-	p.dirty = true
-	if p.debounce <= 0 {
-		s.flushPersistLocked()
-		if p.err != nil {
-			return PersistError{Err: p.err}
-		}
-		return nil
-	}
-	if p.timer != nil {
-		p.timer.Reset(p.debounce)
-		return nil
-	}
-	p.timer = time.AfterFunc(p.debounce, s.flushPersist)
+	s.writeMetaLocked()
 	return nil
 }
 
-// flushPersist is the timer callback: one atomic write when dirty.
-func (s *Store) flushPersist() {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.flushPersistLocked()
+func (s *Store) metaGetLocked(k string) (string, bool) {
+	var v string
+	err := s.db.QueryRow(`SELECT v FROM store_meta WHERE k=?`, k).Scan(&v)
+	if err == sql.ErrNoRows {
+		return "", false
+	}
+	if err != nil {
+		panic("store sqlite meta: " + err.Error())
+	}
+	return v, true
 }
 
-func (s *Store) flushPersistLocked() {
-	p := s.persist
-	if p == nil {
-		return
-	}
-	if p.timer != nil {
-		p.timer.Stop()
-		p.timer = nil
-	}
-	if !p.dirty {
-		return
-	}
-	if err := s.writePersistLocked(); err != nil {
-		p.err = err // stays dirty; retried on a backoff timer
-		s.armPersistRetryLocked()
-		return
-	}
-	p.err = nil
-	p.dirty = false
-	p.backoff = 0
+func (s *Store) writeMetaLocked() {
+	s.sqlExec(`INSERT OR REPLACE INTO store_meta(k, v) VALUES(?,?)`, "seed", strconv.FormatInt(s.seed, 10))
+	s.sqlExec(`INSERT OR REPLACE INTO store_meta(k, v) VALUES(?,?)`, "locale", string(s.loc))
+	s.sqlExec(`INSERT OR REPLACE INTO store_meta(k, v) VALUES(?,?)`, "timezone", s.tzName)
 }
 
-func (s *Store) armPersistRetryLocked() {
-	p := s.persist
-	if p == nil {
-		return
-	}
-	delay := p.nextBackoff()
-	if p.timer != nil {
-		p.timer.Reset(delay)
-		return
-	}
-	p.timer = time.AfterFunc(delay, s.flushPersist)
-}
-
-func (p *persistState) nextBackoff() time.Duration {
-	if p.backoff <= 0 {
-		if p.debounce > 0 {
-			p.backoff = p.debounce
-		} else {
-			p.backoff = DefaultPersistDebounce
+func (s *Store) loadMetaLocked() {
+	if v, ok := s.metaGetLocked("seed"); ok {
+		if n, err := strconv.ParseInt(v, 10, 64); err == nil {
+			s.seed = n
+			if !s.wallClock {
+				s.clk = clock.New(s.seed)
+			}
 		}
-		return p.backoff
 	}
-	next := p.backoff * 2
-	if next > persistRetryMax {
-		next = persistRetryMax
+	if v, ok := s.metaGetLocked("locale"); ok && v != "" {
+		s.loc = locale.Parse(v)
 	}
-	p.backoff = next
-	return next
+	if v, ok := s.metaGetLocked("timezone"); ok && v != "" {
+		s.applyTimezoneLocked(v)
+	}
 }
 
-func (s *Store) writePersistLocked() error {
-	b, err := fixtures.MarshalYAML(s.snapshotLocked())
-	if err != nil {
-		return err
+func (s *Store) applyTimezoneLocked(name string) {
+	s.tzName = name
+	if name == "" {
+		return
 	}
-	return writeAtomic(s.persist.path, b)
+	if loc, err := time.LoadLocation(name); err == nil {
+		s.tz = loc
+		return
+	}
+	if strings.HasPrefix(name, "+") || strings.HasPrefix(name, "-") {
+		if t, err := time.Parse("-0700", name); err == nil {
+			_, off := t.Zone()
+			s.tz = time.FixedZone("fix", off)
+		}
+	}
 }
 
-// writeAtomic replaces path via same-directory temp file + rename so a
-// reader (or a crash) never sees a partial document.
-func writeAtomic(path string, b []byte) error {
-	dir := filepath.Dir(path)
-	tmp, err := os.CreateTemp(dir, "."+filepath.Base(path)+".tmp-")
-	if err != nil {
-		return err
-	}
-	name := tmp.Name()
-	defer os.Remove(name) // no-op once renamed
-	if _, err := tmp.Write(b); err != nil {
-		tmp.Close()
-		return err
-	}
-	if err := tmp.Sync(); err != nil {
-		tmp.Close()
-		return err
-	}
-	if err := tmp.Close(); err != nil {
-		return err
-	}
-	if err := os.Chmod(name, 0o644); err != nil {
-		return err
-	}
-	return os.Rename(name, path)
-}
-
-// Flush writes pending mutations to the persistence file now (no-op when
-// persistence is not armed) and returns the write error, if any. A failed
-// Flush keeps the store dirty and rearms a backoff retry so the failure
-// is not silent if the caller does not retry.
+// Flush checkpoints the WAL (no-op when persistence is not armed).
 func (s *Store) Flush() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -307,29 +240,23 @@ func (s *Store) Flush() error {
 	if p == nil {
 		return nil
 	}
-	s.flushPersistLocked()
-	return p.err
-}
-
-// Close flushes pending mutations and stops the debounce timer. Safe to
-// call on a store without persistence. A failed flush still stops the
-// timer: Close is the end of the store's lifetime.
-func (s *Store) Close() error {
-	err := s.Flush()
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if p := s.persist; p != nil && p.timer != nil {
-		p.timer.Stop()
-		p.timer = nil
+	if _, err := s.db.Exec(`PRAGMA wal_checkpoint(PASSIVE)`); err != nil {
+		p.err = err
+		return err
 	}
-	// The working copy stays readable after Close: the previous map-backed
-	// store kept the graph, and persist tests (TestRestartDoesNotReuseIds)
-	// still Issue() the closed handle. Stage-3 cutover can Close the db.
-	return err
+	p.err = nil
+	return nil
 }
 
-// PersistErr is the last background (debounced) write error, for
-// embedders that want to poll disk health between flushes.
+// Close checkpoints WAL. The working copy stays readable after Close:
+// persist tests (TestRestartDoesNotReuseIds) still Issue() the closed
+// handle, matching the pre-cutover graph.
+func (s *Store) Close() error {
+	return s.Flush()
+}
+
+// PersistErr is the last checkpoint error, for embedders that poll disk
+// health between flushes.
 func (s *Store) PersistErr() error {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -440,15 +367,7 @@ func (s *Store) Apply(doc fixtures.Doc) error {
 		s.loc = locale.Parse(doc.Locale)
 	}
 	if doc.Timezone != "" {
-		if loc, err := time.LoadLocation(doc.Timezone); err == nil {
-			s.tz = loc
-		} else if strings.HasPrefix(doc.Timezone, "+") || strings.HasPrefix(doc.Timezone, "-") {
-			// +0900
-			if t, err := time.Parse("-0700", doc.Timezone); err == nil {
-				_, off := t.Zone()
-				s.tz = time.FixedZone("fix", off)
-			}
-		}
+		s.applyTimezoneLocked(doc.Timezone)
 	}
 
 	for _, u := range doc.Users {
@@ -3468,9 +3387,10 @@ func AsFieldError(err error) (FieldError, bool) {
 	return FieldError{}, false
 }
 
-// PersistError is a durable-mode (PersistDebounce < 0) flush failure.
-// The in-memory mutation has already been applied; a retry (caller or
-// persist backoff) will try the disk write again.
+// PersistError is a persist-layer failure after the graph mutation has
+// already been applied. Stage 3 commits SQL before return, so this is
+// reserved for checkpoint / residual disk errors; YAML write-through
+// no longer produces it.
 type PersistError struct {
 	Err error
 }

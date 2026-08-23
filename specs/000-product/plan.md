@@ -11,8 +11,8 @@
 8. Gadak conformance test as the acceptance gate.
 9. Family docs, Makefile, CI, secretscan.
 10. Public embedding surface (root package `issuetap`) + opt-in
-    write-through persistence + attachment bytes that survive
-    snapshot/restore.
+    on-disk SQLite persistence + attachment bytes that survive
+    snapshot/restore. YAML remains fixture seed and Snapshot export.
 11. First-class `duedate`, complete editmeta for the writable system
     fields, and a fixture/persist custom-field registry (kind + options)
     that both editmeta and UpdateIssue derive from.

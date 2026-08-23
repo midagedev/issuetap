@@ -126,10 +126,12 @@ issuetap diagnose [--addr host:port] [--out file.zip]
 `fixtures apply` loads the file into a throwaway store and prints counts
 (it does not change a running `serve`; that is `POST /api/fixtures/apply`).
 `fixtures snapshot` prints `GET /api/fixtures/snapshot` from a running server.
-`--persist <file>` keeps mutations across restarts: serve writes the file
-before returning 2xx (atomic replace) and reloads it on the next start
-(and then supersedes `--fixture`; delete it to reseed). `--persist-debounce`
-is lab-only.
+`--persist <file>` keeps mutations across restarts as an on-disk SQLite
+database (recommended `.db`): serve commits before returning 2xx and
+reopens the file on the next start (and then supersedes `--fixture`;
+delete it to reseed). A legacy YAML persist file is refused — pass it as
+`--fixture` and set `--persist` to a new `.db`. `--persist-debounce` is a
+no-op.
 
 ## Embedding (Go)
 
@@ -139,7 +141,7 @@ in-process:
 ```go
 e, err := issuetap.NewEmbedded(issuetap.EmbeddedConfig{
 	FixturePath: "fixture.yaml",
-	PersistPath: "state.yaml", // optional: survive restarts
+	PersistPath: "state.db", // optional: survive restarts (SQLite)
 })
 defer e.Close()
 http.Handle("/", e) // full surface: /rest/api/3, /wiki, /api, dashboard

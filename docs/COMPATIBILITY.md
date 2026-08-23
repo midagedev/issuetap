@@ -59,6 +59,7 @@ Jira layout `2006-01-02T15:04:05.000-0700`.
 | Issue link type | `GET /issueLinkType` | Supported | Cloud default 4: Blocks, Cloners, Duplicate, Relates (ids 10000–10003). |
 | Field catalog | `GET /field` | Supported | Names localize. |
 | Projects | `GET /project/search`, `GET /project`, `POST /project`, `GET /project/{key}` | Supported | `values` / `isLast` / `total` / `startAt`. POST accepts `key` and `name`; duplicate or invalid key is HTTP 400. |
+| Project catalogs | `GET /project/{key}/versions`, `GET /project/{key}/components` | Supported | Issue-derived `{id,name}` arrays (name then id). `released`/`archived` always false; `releaseDate` omitted. Missing project is 404 (same envelope as `GET /project/{key}`). |
 | Search | `POST /search/jql` | Supported | JQL subset in `internal/jql`. |
 | Count | `POST /search/approximate-count` | Supported | Equals search length. |
 | Issue | `GET /issue/{key}` | Supported | `expand=changelog`. |
@@ -104,12 +105,11 @@ This is enough to develop a DC client. It is not a verified DC product.
 
 `GET /dashboard`, `GET /board`, `GET /rest/agile/1.0/board`, webhooks,
 permissions, application-properties, group/member, JQL autocomplete,
-expression eval, Confluence `/wiki/api/v2/pages`, `/wiki/rest/api/user/current`,
-`GET /project/{key}/versions`, `GET /project/{key}/components`.
+expression eval, Confluence `/wiki/api/v2/pages`, `/wiki/rest/api/user/current`.
 
-A path after `/project/{key}` is an unimplemented sub-resource (HTTP 501),
-not a missing project. `GET /project/TAP/versions` must not 404 as
-`key 'TAP/versions'`.
+A path after `/project/{key}` other than `versions` and `components` is an
+unimplemented sub-resource (HTTP 501), not a missing project.
+`GET /project/TAP/roles` must not 404 as `key 'TAP/roles'`.
 
 ## Lab API
 

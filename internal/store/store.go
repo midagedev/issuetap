@@ -2959,8 +2959,8 @@ func removeLabel(in []string, want string) []string {
 }
 
 // Version and component identity is the union of {id,name} already on
-// issues in the project. fixtures.Project has no versions/components list
-// (GET /project/{key}/versions is 501), so the issue-typed arrays are the
+// issues in the project. fixtures.Project has no versions/components list,
+// so GET /project/{key}/versions and /components serve this derived
 // catalog. A project with no such rows yet accepts a name as-is so a
 // minimal fixture still round-trips; a present catalog rejects unknown
 // id/name — Cloud does not create versions on issue edit.
@@ -3087,6 +3087,35 @@ func (s *Store) projectNamedCatalogLocked(project, field string) []model.Named {
 		out = append(out, n)
 	}
 	return out
+}
+
+// ProjectVersions is GET /project/{key}/versions: the issue-derived
+// {id,name} catalog for the project, sorted by name then id.
+func (s *Store) ProjectVersions(projectKey string) []model.Named {
+	return s.projectNamedCatalog(projectKey, "fixVersions")
+}
+
+// ProjectComponents is GET /project/{key}/components: the issue-derived
+// {id,name} catalog for the project, sorted by name then id.
+func (s *Store) ProjectComponents(projectKey string) []model.Named {
+	return s.projectNamedCatalog(projectKey, "components")
+}
+
+func (s *Store) projectNamedCatalog(project, field string) []model.Named {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := s.projectNamedCatalogLocked(project, field)
+	sortNamed(out)
+	return out
+}
+
+func sortNamed(in []model.Named) {
+	sort.Slice(in, func(i, j int) bool {
+		if in[i].Name != in[j].Name {
+			return in[i].Name < in[j].Name
+		}
+		return in[i].ID < in[j].ID
+	})
 }
 
 func namedHasID(in []model.Named, id string) bool {

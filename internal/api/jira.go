@@ -302,19 +302,46 @@ func (s *Server) getProjects(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, out)
 }
 
-func (s *Server) getProject(w http.ResponseWriter, r *http.Request, key string) {
-	key = strings.Trim(key, "/")
-	// Extra path segments are unimplemented sub-resources, not a missing key.
-	if strings.Contains(key, "/") {
-		writeUnsupported(w, r.Method, r.URL.Path)
-		return
-	}
-	p := s.st.Project(key)
-	if p == nil {
+func (s *Server) getProject(w http.ResponseWriter, r *http.Request, rest string) {
+	rest = strings.Trim(rest, "/")
+	key, extra, _ := strings.Cut(rest, "/")
+	if key == "" {
 		writeJiraError(w, http.StatusNotFound, "No project could be found with key '"+key+"'.")
 		return
 	}
-	writeJSON(w, http.StatusOK, s.projectJSON(p))
+	// Extra path segments are unimplemented sub-resources, not a missing
+	// key — except versions/components, which serve the issue-derived catalog.
+	switch extra {
+	case "":
+		p := s.st.Project(key)
+		if p == nil {
+			writeJiraError(w, http.StatusNotFound, "No project could be found with key '"+key+"'.")
+			return
+		}
+		writeJSON(w, http.StatusOK, s.projectJSON(p))
+	case "versions":
+		s.getProjectNamedCatalog(w, key, s.st.ProjectVersions)
+	case "components":
+		s.getProjectNamedCatalog(w, key, s.st.ProjectComponents)
+	default:
+		writeUnsupported(w, r.Method, r.URL.Path)
+	}
+}
+
+func (s *Server) getProjectNamedCatalog(w http.ResponseWriter, key string, catalog func(string) []model.Named) {
+	if s.st.Project(key) == nil {
+		writeJiraError(w, http.StatusNotFound, "No project could be found with key '"+key+"'.")
+		return
+	}
+	list := catalog(key)
+	out := make([]any, 0, len(list))
+	for _, n := range list {
+		out = append(out, map[string]any{
+			"id": n.ID, "name": n.Name,
+			"released": false, "archived": false,
+		})
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
 // postProject is Cloud v3 POST /rest/api/3/project, trimmed to the fields

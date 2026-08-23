@@ -17,7 +17,8 @@ package api_test
 // | POST comment visibility / jsdPublic echo | TestCommentVisibilityRoundTrip / TestCommentInternalPropertySetsJsdPublicFalse | TestCommentRejectsBadVisibilityType / TestCommentPlainPostOmitsVisibilityAndJsdPublic |
 // | comment visibility persist + locale | TestCommentVisibilitySurvivesPersist | TestCommentVisibilityUnchangedUnderKoreanLocale |
 // | GET /project/search values/isLast | TestProjectSearch | TestProjectMissing |
-// | GET /project/{key} is a key; /{key}/… is 501 | TestProjectGetAndListUnchanged | TestProjectSubpathIsUnsupportedNotMissing |
+// | GET /project/{key} is a key; unknown /{key}/… is 501 | TestProjectGetAndListUnchanged | TestProjectSubpathIsUnsupportedNotMissing |
+// | GET /project/{key}/versions|components derived catalog | TestProjectVersionsDerivedCatalog / TestProjectComponentsDerivedCatalog | TestProjectVersionsMissingProject / TestProjectVersionsEmptyProject |
 // | GET /priority order | TestPriorityOrder | TestPriorityLocaleOverlay |
 // | GET /field catalog | TestFieldCatalog | TestFieldNamesLocalize |
 // | GET /filter/my | TestFilters | TestFiltersEmpty |
@@ -376,14 +377,17 @@ func TestProjectMissing(t *testing.T) {
 }
 
 // TestProjectSubpathIsUnsupportedNotMissing is the class closer for
-// GET /project/{key}/…. A 404 with key 'TAP/versions' looks like the
-// project is missing; a 501 with unsupported_endpoint is the honest gap.
+// GET /project/{key}/…. A 404 with key 'TAP/roles' looks like the
+// project is missing; a 501 with unsupported_endpoint is the honest gap
+// for sub-resources that remain unimplemented.
+//
+// GDK-662, 2026-08-23, derived catalog now served: versions/components
+// 501 assertions moved to 200+shape (TestProjectVersionsDerivedCatalog,
+// TestProjectComponentsDerivedCatalog). roles stays 501.
 func TestProjectSubpathIsUnsupportedNotMissing(t *testing.T) {
 	ts := testServer(t, locale.EN, dialect.Cloud)
 	defer ts.Close()
 	for _, path := range []string{
-		"/rest/api/3/project/TAP/versions",
-		"/rest/api/3/project/TAP/components",
 		"/rest/api/3/project/TAP/roles",
 	} {
 		t.Run(path, func(t *testing.T) {
@@ -424,6 +428,127 @@ func TestProjectGetAndListUnchanged(t *testing.T) {
 	}
 }
 
+func TestProjectVersionsDerivedCatalog(t *testing.T) {
+	ts := testServer(t, locale.EN, dialect.Cloud)
+	defer ts.Close()
+	for _, path := range []string{
+		"/rest/api/3/project/TAP/versions",
+		"/rest/api/2/project/TAP/versions",
+	} {
+		t.Run(path, func(t *testing.T) {
+			res := authGet(t, ts, path)
+			if res.StatusCode != http.StatusOK {
+				raw, _ := io.ReadAll(res.Body)
+				res.Body.Close()
+				t.Fatalf("status %d want 200 body=%s", res.StatusCode, raw)
+			}
+			arr := decodeArr(t, res)
+			if len(arr) != 1 {
+				t.Fatalf("len=%d want 1 (tiny TAP-1 fixVersions)", len(arr))
+			}
+			assertDerivedCatalogRow(t, arr[0], "2026.8")
+		})
+	}
+	// wrap() records every path; no extra catalog instrumentation.
+	traced := decode(t, authGet(t, ts, "/api/requests"))
+	found := false
+	for _, raw := range traced["requests"].([]any) {
+		m := raw.(map[string]any)
+		if m["path"] == "/rest/api/3/project/TAP/versions" && int(m["status"].(float64)) == 200 {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("/api/requests missed GET /project/TAP/versions: %v", traced["requests"])
+	}
+}
+
+func TestProjectVersionsEmptyProject(t *testing.T) {
+	ts := testServer(t, locale.EN, dialect.Cloud)
+	defer ts.Close()
+	created := decode(t, authPost(t, ts, "/rest/api/3/project", map[string]any{
+		"key": "EMPTY", "name": "Empty",
+	}))
+	if created["key"] != "EMPTY" {
+		t.Fatalf("create EMPTY: %v", created)
+	}
+	res := authGet(t, ts, "/rest/api/3/project/EMPTY/versions")
+	raw, err := io.ReadAll(res.Body)
+	res.Body.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("status %d want 200 body=%s", res.StatusCode, raw)
+	}
+	if string(bytes.TrimSpace(raw)) != "[]" {
+		t.Fatalf("empty catalog body=%s want []", raw)
+	}
+}
+
+func TestProjectVersionsMissingProject(t *testing.T) {
+	ts := testServer(t, locale.EN, dialect.Cloud)
+	defer ts.Close()
+	res := authGet(t, ts, "/rest/api/3/project/NOSUCH/versions")
+	if res.StatusCode != http.StatusNotFound {
+		raw, _ := io.ReadAll(res.Body)
+		res.Body.Close()
+		t.Fatalf("status %d want 404 body=%s", res.StatusCode, raw)
+	}
+	v := decode(t, res)
+	msg := fmtErrorMessages(v)
+	if strings.Contains(msg, "unsupported_endpoint") {
+		t.Fatalf("missing project claimed unsupported_endpoint: %v", v)
+	}
+	if !strings.Contains(msg, "NOSUCH") {
+		t.Fatalf("404 missing project key: %v", v)
+	}
+	if strings.Contains(msg, "NOSUCH/versions") {
+		t.Fatalf("treated remainder as a project key: %v", v)
+	}
+}
+
+func TestProjectComponentsDerivedCatalog(t *testing.T) {
+	ts := testServer(t, locale.EN, dialect.Cloud)
+	defer ts.Close()
+	res := authGet(t, ts, "/rest/api/3/project/TAP/components")
+	if res.StatusCode != http.StatusOK {
+		raw, _ := io.ReadAll(res.Body)
+		res.Body.Close()
+		t.Fatalf("status %d want 200 body=%s", res.StatusCode, raw)
+	}
+	arr := decodeArr(t, res)
+	if len(arr) != 1 {
+		t.Fatalf("len=%d want 1 (tiny TAP-1 components)", len(arr))
+	}
+	assertDerivedCatalogRow(t, arr[0], "Core")
+}
+
+func assertDerivedCatalogRow(t *testing.T, row any, wantName string) {
+	t.Helper()
+	m, ok := row.(map[string]any)
+	if !ok {
+		t.Fatalf("row type %T", row)
+	}
+	id, _ := m["id"].(string)
+	if id == "" {
+		t.Fatalf("missing id: %v", m)
+	}
+	if m["name"] != wantName {
+		t.Fatalf("name=%v want %s", m["name"], wantName)
+	}
+	if m["released"] != false {
+		t.Fatalf("released=%v want false", m["released"])
+	}
+	if m["archived"] != false {
+		t.Fatalf("archived=%v want false", m["archived"])
+	}
+	if _, ok := m["releaseDate"]; ok {
+		t.Fatalf("releaseDate present on derived catalog: %v", m["releaseDate"])
+	}
+}
+
 func TestProjectSubpathKoreanFixture(t *testing.T) {
 	doc, err := fixtures.Load(fixtures.Example("korean.yaml"))
 	if err != nil {
@@ -438,15 +563,30 @@ func TestProjectSubpathKoreanFixture(t *testing.T) {
 	ts := httptest.NewServer(api.New(cfg, st, nil, nil, false).Handler())
 	defer ts.Close()
 
+	// GDK-662, 2026-08-23, derived catalog now served. korean.yaml TAP
+	// issues have no fixVersions/components, so the arrays are empty 200.
 	for _, path := range []string{
 		"/rest/api/3/project/TAP/versions",
 		"/rest/api/3/project/TAP/components",
-		"/rest/api/3/project/TAP/roles",
 	} {
 		t.Run(path, func(t *testing.T) {
-			assertProjectSubpathUnsupported(t, ts, path)
+			res := authGet(t, ts, path)
+			raw, err := io.ReadAll(res.Body)
+			res.Body.Close()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if res.StatusCode != http.StatusOK {
+				t.Fatalf("%s status %d want 200 body=%s", path, res.StatusCode, raw)
+			}
+			if string(bytes.TrimSpace(raw)) != "[]" {
+				t.Fatalf("%s body=%s want []", path, raw)
+			}
 		})
 	}
+	t.Run("/rest/api/3/project/TAP/roles", func(t *testing.T) {
+		assertProjectSubpathUnsupported(t, ts, "/rest/api/3/project/TAP/roles")
+	})
 	got := decode(t, authGet(t, ts, "/rest/api/3/project/TAP"))
 	if got["key"] != "TAP" {
 		t.Fatalf("korean fixture GET /project/TAP = %v", got)

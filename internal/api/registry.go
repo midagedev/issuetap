@@ -41,6 +41,8 @@ func Inventory() []Route {
 		{Method: "GET", Path: "/rest/api/{v}/project", Level: Supported, Notes: "DC project list (array)", Cloud: true, DC: true},
 		{Method: "POST", Path: "/rest/api/{v}/project", Level: Supported, Notes: "key and name; duplicate or invalid key 400", Cloud: true, DC: true},
 		{Method: "GET", Path: "/rest/api/{v}/project/{key}", Level: Supported, Cloud: true, DC: true},
+		{Method: "GET", Path: "/rest/api/{v}/project/{key}/versions", Level: Supported, Notes: "issue-derived {id,name} catalog; released/archived always false; no releaseDate", Cloud: true, DC: true},
+		{Method: "GET", Path: "/rest/api/{v}/project/{key}/components", Level: Supported, Notes: "issue-derived {id,name} catalog; same shape as /versions", Cloud: true, DC: true},
 		{Method: "POST", Path: "/rest/api/{v}/search/jql", Level: Supported, Notes: "nextPageToken/isLast; Cloud only", Cloud: true, DC: false},
 		{Method: "POST", Path: "/rest/api/{v}/search/approximate-count", Level: Supported, Cloud: true, DC: false},
 		{Method: "POST", Path: "/rest/api/{v}/search", Level: Supported, Notes: "DC startAt/maxResults/total; Cloud legacy also served", Cloud: true, DC: true},
@@ -104,8 +106,6 @@ func Inventory() []Route {
 		{Method: "POST", Path: "/rest/api/{v}/expression/eval", Level: Unsupported, Cloud: true, DC: true},
 		{Method: "GET", Path: "/wiki/rest/api/user/current", Level: Unsupported, Cloud: true, DC: false},
 		{Method: "GET", Path: "/wiki/api/v2/pages", Level: Unsupported, Notes: "v2 Confluence API is out of v0", Cloud: true, DC: false},
-		{Method: "GET", Path: "/rest/api/{v}/project/{key}/versions", Level: Unsupported, Notes: "project version catalog is out of v0", Cloud: true, DC: true},
-		{Method: "GET", Path: "/rest/api/{v}/project/{key}/components", Level: Unsupported, Notes: "project component catalog is out of v0", Cloud: true, DC: true},
 
 		// issuetap surfaces
 		{Method: "GET", Path: "/healthz", Level: IssuetapAPI, Notes: "liveness"},

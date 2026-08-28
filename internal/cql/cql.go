@@ -2,6 +2,7 @@
 //
 //	space="KEY" AND type=page AND lastModified >= "2006-01-02 15:04" ORDER BY lastmodified ASC
 //	space="KEY" AND type=comment AND lastModified >= "..." order by lastmodified asc
+//	space IN ("KEY1","KEY2") AND type=page AND lastModified >= "..." order by lastmodified asc
 //
 // Unparseable CQL is an error. Returning every page would look like a working
 // wiki and hide a client bug.
@@ -17,12 +18,28 @@ import (
 
 // Query is a parsed CQL.
 type Query struct {
-	Space    string
+	// Spaces is the space filter: nil/empty means any space. One entry for
+	// space="KEY", several for space IN ("A","B") — gadak batches incremental
+	// sync into one query over many spaces.
+	Spaces   []string
 	Type     string // page | comment | "" (any)
 	After    time.Time
 	HasAfter bool
 	OrderAsc bool
 	Raw      string
+}
+
+// matchSpace reports whether key passes the query's space filter.
+func (q Query) matchSpace(key string) bool {
+	if len(q.Spaces) == 0 {
+		return true
+	}
+	for _, s := range q.Spaces {
+		if strings.EqualFold(key, s) {
+			return true
+		}
+	}
+	return false
 }
 
 // Parse understands the gadak clauses above. Extra AND clauses that we do
@@ -47,13 +64,19 @@ func Parse(raw string) (Query, error) {
 		if part == "" {
 			continue
 		}
+		if keys, ok, err := parseSpaceIn(part); err != nil {
+			return q, err
+		} else if ok {
+			q.Spaces = keys
+			continue
+		}
 		field, op, val, err := splitPred(part)
 		if err != nil {
 			return q, err
 		}
 		switch strings.ToLower(field) {
 		case "space":
-			q.Space = unquote(val)
+			q.Spaces = []string{unquote(val)}
 		case "type":
 			q.Type = strings.ToLower(unquote(val))
 		case "lastmodified":
@@ -71,12 +94,43 @@ func Parse(raw string) (Query, error) {
 	return q, nil
 }
 
+// parseSpaceIn parses one `space IN ("A", "B")` clause. ok is false when the
+// clause is not a space-IN at all (the caller falls through to splitPred); a
+// malformed space-IN — no parens, an empty list — is an error, same honesty
+// rule as every other clause here.
+func parseSpaceIn(part string) (keys []string, ok bool, err error) {
+	low := strings.ToLower(part)
+	if !strings.HasPrefix(low, "space") {
+		return nil, false, nil
+	}
+	rest := strings.TrimSpace(part[len("space"):])
+	if len(rest) < 2 || !strings.EqualFold(rest[:2], "in") {
+		return nil, false, nil
+	}
+	if len(rest) > 2 && isIdent(rest[2]) { // e.g. a field named "spaceindex"
+		return nil, false, nil
+	}
+	list := strings.TrimSpace(rest[2:])
+	if !strings.HasPrefix(list, "(") || !strings.HasSuffix(list, ")") {
+		return nil, true, fmt.Errorf("cql: bad space IN list: %q", part)
+	}
+	for _, item := range strings.Split(list[1:len(list)-1], ",") {
+		if v := unquote(item); v != "" {
+			keys = append(keys, v)
+		}
+	}
+	if len(keys) == 0 {
+		return nil, true, fmt.Errorf("cql: empty space IN list: %q", part)
+	}
+	return keys, true, nil
+}
+
 // MatchPage reports whether a page satisfies a type=page (or untyped) query.
 func MatchPage(q Query, p *model.Page) bool {
 	if q.Type != "" && q.Type != "page" {
 		return false
 	}
-	if q.Space != "" && !strings.EqualFold(p.SpaceKey, q.Space) {
+	if !q.matchSpace(p.SpaceKey) {
 		return false
 	}
 	if q.HasAfter {
@@ -93,7 +147,7 @@ func MatchComment(q Query, spaceKey, when string) bool {
 	if q.Type != "" && q.Type != "comment" {
 		return false
 	}
-	if q.Space != "" && !strings.EqualFold(spaceKey, q.Space) {
+	if !q.matchSpace(spaceKey) {
 		return false
 	}
 	if q.HasAfter {

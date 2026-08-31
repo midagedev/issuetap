@@ -169,6 +169,19 @@ func (s *Server) issueJSON(r *http.Request, iss *model.Issue, fields []string, e
 	links := make([]any, 0, len(iss.Links))
 	for _, l := range iss.Links {
 		obj := map[string]any{"type": issueLinkTypeFields(l.TypeName)}
+		// The id is synthetic but stable: typeID:outwardEnd:inwardEnd, the
+		// same string from either projection, so DELETE /issueLink/{id} can
+		// name the link with what any one GET handed out. An element labels
+		// the OTHER end by that end's role, so {outwardIssue: B} on X means
+		// B is the outward end — and an old-convention persist row pairs up
+		// to the identical id, which is why deletion needs no migration.
+		if tid, _ := issueLinkTypeFields(l.TypeName)["id"].(string); tid != "" {
+			if l.OutwardKey != "" {
+				obj["id"] = issueLinkID(tid, l.OutwardKey, iss.Key)
+			} else if l.InwardKey != "" {
+				obj["id"] = issueLinkID(tid, iss.Key, l.InwardKey)
+			}
+		}
 		if l.OutwardKey != "" {
 			obj["outwardIssue"] = map[string]any{"key": l.OutwardKey}
 		}
@@ -367,6 +380,11 @@ func (s *Server) historyJSON(h model.History) map[string]any {
 	return map[string]any{
 		"id": h.ID, "created": h.Created, "author": s.userJSON(h.Author), "items": items,
 	}
+}
+
+// issueLinkID is the synthetic wire id for one link: typeID:outwardEnd:inwardEnd.
+func issueLinkID(typeID, outwardKey, inwardKey string) string {
+	return typeID + ":" + outwardKey + ":" + inwardKey
 }
 
 func issueLinkTypeFields(name string) map[string]any {

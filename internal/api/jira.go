@@ -47,6 +47,8 @@ func (s *Server) handleJira(w http.ResponseWriter, r *http.Request, path string)
 		s.getIssueLinkTypes(w, r)
 	case r.Method == http.MethodPost && suffix == "/issueLink":
 		s.postIssueLink(w, r)
+	case r.Method == http.MethodDelete && strings.HasPrefix(suffix, "/issueLink/"):
+		s.deleteIssueLink(w, r, strings.TrimPrefix(suffix, "/issueLink/"))
 	case r.Method == http.MethodGet && suffix == "/field":
 		s.getFields(w, r)
 	case r.Method == http.MethodGet && suffix == "/project/search":
@@ -258,6 +260,27 @@ func (s *Server) postIssueLink(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusCreated)
+}
+
+// deleteIssueLink is DELETE /rest/api/{v}/issueLink/{id}. The id is the
+// synthetic typeID:outwardEnd:inwardEnd this server's own GET hands out —
+// opaque to clients, exactly like a Cloud link id.
+func (s *Server) deleteIssueLink(w http.ResponseWriter, r *http.Request, id string) {
+	parts := strings.SplitN(strings.TrimSuffix(id, "/"), ":", 3)
+	if len(parts) != 3 || parts[0] == "" || parts[1] == "" || parts[2] == "" {
+		writeJiraError(w, http.StatusNotFound, "No issue link with the given id exists.")
+		return
+	}
+	err := s.st.DeleteIssueLink(parts[0], parts[1], parts[2])
+	if err != nil {
+		if store.IsNotFound(err) {
+			writeJiraError(w, http.StatusNotFound, "No issue link with the given id exists.")
+			return
+		}
+		writeJiraWriteError(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (s *Server) getFields(w http.ResponseWriter, r *http.Request) {

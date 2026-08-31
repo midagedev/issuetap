@@ -408,3 +408,74 @@ func TestPostIssueLinkSurvivesPersistReload(t *testing.T) {
 		t.Fatalf("link lost across persist reload; TAP-1 links=%+v TAP-3 links=%+v", a.Links, b.Links)
 	}
 }
+
+// The synthetic link id round-trips: both projections of one link hand out
+// the same id, and DELETE on that id removes both. This is the wire contract
+// gadak unlink stands on (gadak GDK-1205).
+func TestDeleteIssueLinkByRenderedID(t *testing.T) {
+	ts := testServer(t, locale.EN, dialect.Cloud)
+	defer ts.Close()
+
+	res := postIssueLink(t, ts, issueLinkPayload("10000", "", "TAP-1", "TAP-3"))
+	if res.StatusCode != http.StatusCreated {
+		status, msgs := jiraErrorMessages(t, res)
+		t.Fatalf("POST issueLink status %d, want 201; errorMessages=%s", status, msgs)
+	}
+	res.Body.Close()
+
+	idOn := func(key string) string {
+		t.Helper()
+		for _, l := range issueLinksOf(t, ts, key) {
+			typ, _ := l["type"].(map[string]any)
+			if fmt.Sprint(typ["name"]) != "Blocks" {
+				continue
+			}
+			id, _ := l["id"].(string)
+			if id == "" {
+				t.Fatalf("%s Blocks link has no id: %v", key, l)
+			}
+			return id
+		}
+		t.Fatalf("%s has no Blocks link", key)
+		return ""
+	}
+	idA, idB := idOn("TAP-1"), idOn("TAP-3")
+	if idA != idB {
+		t.Fatalf("the two projections disagree about the id: %q vs %q", idA, idB)
+	}
+
+	req, err := http.NewRequest(http.MethodDelete, ts.URL+"/rest/api/3/issueLink/"+idA, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.SetBasicAuth("you@example.com", "issuetap")
+	del, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	del.Body.Close()
+	if del.StatusCode != http.StatusNoContent {
+		t.Fatalf("DELETE status %d, want 204", del.StatusCode)
+	}
+
+	for _, key := range []string{"TAP-1", "TAP-3"} {
+		for _, side := range []string{"outwardIssue", "inwardIssue"} {
+			other := "TAP-3"
+			if key == "TAP-3" {
+				other = "TAP-1"
+			}
+			if directedLinkCount(issueLinksOf(t, ts, key), "Blocks", side, other) != 0 {
+				t.Fatalf("%s still lists a Blocks link after DELETE", key)
+			}
+		}
+	}
+
+	del2, err := http.DefaultClient.Do(req.Clone(req.Context()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	del2.Body.Close()
+	if del2.StatusCode != http.StatusNotFound {
+		t.Fatalf("second DELETE status %d, want 404", del2.StatusCode)
+	}
+}

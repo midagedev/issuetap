@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -1499,6 +1500,50 @@ func (s *Store) AddIssueLink(typeID, typeName, outwardRef, inwardRef string) err
 	s.putIssueLocked(outward)
 	s.putIssueLocked(inward)
 	return s.markDirtyLocked()
+}
+
+// DeleteIssueLink removes the link typeID:outwardKey:inwardKey — both
+// projections, whichever convention wrote them. A pair written under the
+// pre-GDK-1204 mirror-image convention is byte-identical to the corrected
+// pair for the reversed intent, so the same two removals cover old persist
+// rows without a migration. Removing nothing is a not-found, like Cloud.
+func (s *Store) DeleteIssueLink(typeID, outwardKey, inwardKey string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	lt, err := lookupIssueLinkType(typeID, "")
+	if err != nil {
+		return err
+	}
+	outward := s.issueByParentRefLocked(outwardKey)
+	inward := s.issueByParentRefLocked(inwardKey)
+	if outward == nil || inward == nil {
+		return errNotFound("issueLink", issueLinkRef(typeID, outwardKey, inwardKey))
+	}
+	removed := false
+	outward.Links = slices.DeleteFunc(outward.Links, func(l model.IssueLink) bool {
+		hit := strings.EqualFold(l.TypeName, lt.Name) && l.InwardKey == inward.Key
+		removed = removed || hit
+		return hit
+	})
+	inward.Links = slices.DeleteFunc(inward.Links, func(l model.IssueLink) bool {
+		hit := strings.EqualFold(l.TypeName, lt.Name) && l.OutwardKey == outward.Key
+		removed = removed || hit
+		return hit
+	})
+	if !removed {
+		return errNotFound("issueLink", issueLinkRef(typeID, outwardKey, inwardKey))
+	}
+	now := clock.Format(s.clk.Tick())
+	outward.Updated = now
+	inward.Updated = now
+	s.putIssueLocked(outward)
+	s.putIssueLocked(inward)
+	return s.markDirtyLocked()
+}
+
+func issueLinkRef(typeID, outwardKey, inwardKey string) string {
+	return typeID + ":" + outwardKey + ":" + inwardKey
 }
 
 func lookupIssueLinkType(id, name string) (*model.IssueLinkType, error) {

@@ -12,7 +12,7 @@ import (
 // Issue.Custom and left Issue.Duedate untouched.
 func TestUpdateIssueDuedateIsFirstClass(t *testing.T) {
 	st := loadTiny(t)
-	if err := st.UpdateIssue("TAP-2", map[string]any{"duedate": "2026-09-01"}, nil); err != nil {
+	if err := st.UpdateIssue("TAP-2", map[string]any{"duedate": "2026-09-01"}, nil, ""); err != nil {
 		t.Fatal(err)
 	}
 	iss := st.Issue("TAP-2")
@@ -29,7 +29,7 @@ func TestUpdateIssueDuedateIsFirstClass(t *testing.T) {
 
 func TestUpdateIssueDuedateRejectsBadFormat(t *testing.T) {
 	st := loadTiny(t)
-	err := st.UpdateIssue("TAP-2", map[string]any{"duedate": "09/01/2026"}, nil)
+	err := st.UpdateIssue("TAP-2", map[string]any{"duedate": "09/01/2026"}, nil, "")
 	if err == nil {
 		t.Fatal("expected error for non YYYY-MM-DD duedate")
 	}
@@ -48,7 +48,7 @@ func TestUpdateIssueDuedateRejectsBadFormat(t *testing.T) {
 
 func TestUpdateIssueDuedateClearsOnNull(t *testing.T) {
 	st := loadTiny(t)
-	if err := st.UpdateIssue("TAP-1", map[string]any{"duedate": nil}, nil); err != nil {
+	if err := st.UpdateIssue("TAP-1", map[string]any{"duedate": nil}, nil, ""); err != nil {
 		t.Fatal(err)
 	}
 	iss := st.Issue("TAP-1")
@@ -92,7 +92,7 @@ func TestRegisteredOptionRejectsUnknownID(t *testing.T) {
 	}
 	err := st.UpdateIssue("TAP-1", map[string]any{
 		"customfield_10050": map[string]any{"id": "99999"},
-	}, nil)
+	}, nil, "")
 	if err == nil {
 		t.Fatal("expected 400-class error for unknown option id")
 	}
@@ -116,7 +116,7 @@ func TestRegisteredOptionAcceptsKnownID(t *testing.T) {
 	}
 	if err := st.UpdateIssue("TAP-1", map[string]any{
 		"customfield_10050": map[string]any{"id": "10100"},
-	}, nil); err != nil {
+	}, nil, ""); err != nil {
 		t.Fatal(err)
 	}
 	got := st.Issue("TAP-1").Custom["customfield_10050"]
@@ -132,7 +132,7 @@ func TestUnregisteredCustomFieldRejected(t *testing.T) {
 	st := loadTiny(t)
 	err := st.UpdateIssue("TAP-2", map[string]any{
 		"customfield_99999": map[string]any{"value": "whatever"},
-	}, nil)
+	}, nil, "")
 	fe, ok := AsFieldError(err)
 	if !ok || fe.Field != "customfield_99999" {
 		t.Fatalf("want FieldError{Field:customfield_99999}, got %T %v", err, err)
@@ -167,7 +167,7 @@ func TestCustomFieldRegistrySurvivesSnapshot(t *testing.T) {
 	}
 	if err := st2.UpdateIssue("TAP-1", map[string]any{
 		"customfield_10050": map[string]any{"id": "99999"},
-	}, nil); err == nil {
+	}, nil, ""); err == nil {
 		t.Fatal("restored registry lost option validation")
 	}
 }

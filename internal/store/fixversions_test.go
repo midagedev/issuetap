@@ -62,7 +62,7 @@ func TestUpdateIssueFixVersionsAddByID(t *testing.T) {
 		"fixVersions": []any{
 			map[string]any{"add": map[string]any{"id": v.ID}},
 		},
-	})
+	}, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -87,7 +87,7 @@ func TestUpdateIssueFixVersionsFieldsReplace(t *testing.T) {
 	v := tap1Named(t, st, "fixVersions")
 	if err := st.UpdateIssue("TAP-2", map[string]any{
 		"fixVersions": []any{map[string]any{"name": v.Name}},
-	}, nil); err != nil {
+	}, nil, ""); err != nil {
 		t.Fatal(err)
 	}
 	iss := st.Issue("TAP-2")
@@ -110,7 +110,7 @@ func TestUpdateIssueComponentsAddByName(t *testing.T) {
 		"components": []any{
 			map[string]any{"add": map[string]any{"name": c.Name}},
 		},
-	})
+	}, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -132,7 +132,7 @@ func TestUpdateIssueComponentsFieldsReplace(t *testing.T) {
 	c := tap1Named(t, st, "components")
 	if err := st.UpdateIssue("TAP-2", map[string]any{
 		"components": []any{map[string]any{"id": c.ID}},
-	}, nil); err != nil {
+	}, nil, ""); err != nil {
 		t.Fatal(err)
 	}
 	iss := st.Issue("TAP-2")
@@ -155,7 +155,7 @@ func TestUpdateIssueFixVersionsUnknownID(t *testing.T) {
 		"fixVersions": []any{
 			map[string]any{"add": map[string]any{"id": "99999"}},
 		},
-	})
+	}, "")
 	if err == nil {
 		t.Fatal("expected error for unknown fixVersions id")
 	}
@@ -176,7 +176,7 @@ func TestUpdateIssueComponentsUnknownID(t *testing.T) {
 	st := loadTiny(t)
 	err := st.UpdateIssue("TAP-2", map[string]any{
 		"components": []any{map[string]any{"id": "99999"}},
-	}, nil)
+	}, nil, "")
 	if err == nil {
 		t.Fatal("expected error for unknown components id")
 	}
@@ -193,7 +193,7 @@ func TestUpdateIssueUnknownSystemKeyRejected(t *testing.T) {
 	before := append([]model.Named{}, st.Issue("TAP-2").Versions...)
 	err := st.UpdateIssue("TAP-2", map[string]any{
 		"versions": []any{map[string]any{"name": "should-stay-custom"}},
-	}, nil)
+	}, nil, "")
 	fe, ok := AsFieldError(err)
 	if !ok || fe.Field != "versions" {
 		t.Fatalf("want FieldError{Field:versions}, got %T %v", err, err)
@@ -214,7 +214,7 @@ func TestUpdateIssueFixVersionsClearsCustomOverlay(t *testing.T) {
 	iss.Custom = map[string]any{"fixVersions": []any{map[string]any{"name": "stale"}}}
 	if err := st.UpdateIssue("TAP-2", map[string]any{
 		"fixVersions": []any{map[string]any{"name": v.Name}},
-	}, nil); err != nil {
+	}, nil, ""); err != nil {
 		t.Fatal(err)
 	}
 	iss = st.Issue("TAP-2")
@@ -236,7 +236,7 @@ func TestUpdateIssueFixVersionsEmptyCatalogAllowsName(t *testing.T) {
 	}
 	if err := st.UpdateIssue("ZED-1", map[string]any{
 		"fixVersions": []any{map[string]any{"name": "v-lab"}},
-	}, nil); err != nil {
+	}, nil, ""); err != nil {
 		t.Fatal(err)
 	}
 	iss := st.Issue("ZED-1")
@@ -266,7 +266,7 @@ func TestUpdateIssueFixVersionsPersists(t *testing.T) {
 		"fixVersions": []any{
 			map[string]any{"add": map[string]any{"id": v.ID}},
 		},
-	}); err != nil {
+	}, ""); err != nil {
 		t.Fatal(err)
 	}
 	if err := st.Close(); err != nil {
@@ -304,7 +304,7 @@ func TestUpdateIssueComponentsRemove(t *testing.T) {
 		"components": []any{
 			map[string]any{"remove": map[string]any{"name": c.Name}},
 		},
-	}); err != nil {
+	}, ""); err != nil {
 		t.Fatal(err)
 	}
 	iss := st.Issue("TAP-1")

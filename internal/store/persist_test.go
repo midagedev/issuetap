@@ -444,7 +444,7 @@ func TestDurablePersistFailureAllMutations(t *testing.T) {
 			}
 		}},
 		{"UpdateIssue", func(st *Store) error {
-			return st.UpdateIssue("TAP-1", map[string]any{"summary": "census"}, nil)
+			return st.UpdateIssue("TAP-1", map[string]any{"summary": "census"}, nil, "")
 		}, func(t *testing.T, st2 *Store) {
 			if iss := st2.Issue("TAP-1"); iss == nil || iss.Summary != "census" {
 				t.Fatalf("UpdateIssue not visible: %+v", iss)

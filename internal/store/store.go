@@ -2293,16 +2293,11 @@ func (s *Store) applyTransitionLocked(iss *model.Issue, transitionID, authorID s
 	if stTo := s.statusByIDLocked(to); stTo != nil && stTo.StatusCategory.Key == "done" && iss.ResolutionID == "" {
 		iss.ResolutionID = "10000"
 	}
-	s.seqHist++
-	iss.Histories = append(iss.Histories, model.History{
-		ID: "h" + strconv.Itoa(s.seqHist), Created: iss.Updated,
-		Author: *s.userOrDefault(authorID),
-		Items: []model.HistoryItem{{
-			Field: "status", FieldID: "status",
-			From: from, FromString: s.displayFor("status", from),
-			To: to, ToString: s.displayFor("status", to),
-		}},
-	})
+	s.appendHistoryLocked(iss, authorID, []model.HistoryItem{{
+		Field: "status", FieldID: "status",
+		From: from, FromString: s.displayFor("status", from),
+		To: to, ToString: s.displayFor("status", to),
+	}})
 	for _, body := range comments {
 		s.addCommentLocked(iss, authorID, body, nil, nil)
 	}
@@ -2540,20 +2535,30 @@ func (s *Store) SetAssignee(key, accountID, authorID string) error {
 
 // setAssigneeLocked is SetAssignee after the issue lookup: the assignee
 // change and its changelog row. Claim runs it under one lock with the
-// in-progress transition (gadak GDK-591).
+// in-progress transition (gadak GDK-591). A no-change write records no
+// row, like Cloud (gadak GDK-1208).
 func (s *Store) setAssigneeLocked(iss *model.Issue, accountID, authorID string) {
 	from := iss.AssigneeID
 	iss.AssigneeID = accountID
 	iss.Updated = clock.Format(s.clk.Tick())
+	if from == accountID {
+		return
+	}
+	s.appendHistoryLocked(iss, authorID, []model.HistoryItem{{
+		Field: "assignee", FieldID: "assignee",
+		From: from, FromString: s.displayFor("assignee", from),
+		To: accountID, ToString: s.displayFor("assignee", accountID),
+	}})
+}
+
+// appendHistoryLocked writes one changelog group. Created matches
+// iss.Updated, which the caller has already ticked.
+func (s *Store) appendHistoryLocked(iss *model.Issue, authorID string, items []model.HistoryItem) {
 	s.seqHist++
 	iss.Histories = append(iss.Histories, model.History{
 		ID: "h" + strconv.Itoa(s.seqHist), Created: iss.Updated,
 		Author: *s.userOrDefault(authorID),
-		Items: []model.HistoryItem{{
-			Field: "assignee", FieldID: "assignee",
-			From: from, FromString: s.displayFor("assignee", from),
-			To: accountID, ToString: s.displayFor("assignee", accountID),
-		}},
+		Items:  items,
 	})
 }
 
@@ -2675,7 +2680,7 @@ func (s *Store) lastStatusChangeLocked(iss *model.Issue) string {
 
 // UpdateFields applies a fields map (summary, description, labels, …).
 func (s *Store) UpdateFields(key string, fields map[string]any) error {
-	return s.UpdateIssue(key, fields, nil)
+	return s.UpdateIssue(key, fields, nil, "")
 }
 
 // UpdateIssue applies Jira Cloud PUT /issue {fields, update}.
@@ -2683,12 +2688,32 @@ func (s *Store) UpdateFields(key string, fields map[string]any) error {
 // update fields return an error instead of a silent no-op.
 // fixVersions and components are first-class typed arrays (not Custom);
 // fields replaces the whole list, update accepts add/remove/set.
-func (s *Store) UpdateIssue(key string, fields, update map[string]any) error {
+// authorID is the acting user recorded on the changelog group; every
+// field the request actually changed gets one history item, a no-change
+// write gets none (gadak GDK-1208).
+func (s *Store) UpdateIssue(key string, fields, update map[string]any, authorID string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	iss := s.issueByKeyLocked(key)
 	if iss == nil {
 		return errNotFound("issue", key)
+	}
+	// Sorted so the changelog item order is deterministic (same seed →
+	// same snapshot is a repo contract; Go map order is not).
+	touched := make([]string, 0, len(fields)+len(update))
+	for k := range fields {
+		touched = append(touched, k)
+	}
+	for k := range update {
+		if _, dup := fields[k]; !dup {
+			touched = append(touched, k)
+		}
+	}
+	sort.Strings(touched)
+	before := make(map[string][2]string, len(touched))
+	for _, k := range touched {
+		raw, disp := s.changeSnapshotLocked(iss, k)
+		before[k] = [2]string{raw, disp}
 	}
 	if err := s.applyUpdateOps(iss, update); err != nil {
 		return err
@@ -2754,8 +2779,76 @@ func (s *Store) UpdateIssue(key string, fields, update map[string]any) error {
 		}
 	}
 	iss.Updated = clock.Format(s.clk.Tick())
+	var items []model.HistoryItem
+	for _, k := range touched {
+		raw, disp := s.changeSnapshotLocked(iss, k)
+		if b := before[k]; b[0] == raw && b[1] == disp {
+			continue
+		}
+		b := before[k]
+		items = append(items, model.HistoryItem{
+			Field: k, FieldID: k,
+			From: b[0], FromString: b[1],
+			To: raw, ToString: disp,
+		})
+	}
+	if len(items) > 0 {
+		s.appendHistoryLocked(iss, authorID, items)
+	}
 	s.putIssueLocked(iss)
 	return s.markDirtyLocked()
+}
+
+// changeSnapshotLocked is one editable field reduced to a comparable
+// (raw id, display) pair — the from/fromString half of a changelog item
+// before the write, the to/toString half after it. Fields without a
+// catalog id (text, lists) carry "" raw and join names with a space,
+// Cloud's labels convention.
+func (s *Store) changeSnapshotLocked(iss *model.Issue, k string) (raw, display string) {
+	switch k {
+	case "summary":
+		return "", iss.Summary
+	case "description":
+		return "", iss.DescriptionText
+	case "labels":
+		return "", strings.Join(iss.Labels, " ")
+	case "priority":
+		return iss.PriorityID, s.displayFor("priority", iss.PriorityID)
+	case "issuetype":
+		return iss.IssueTypeID, s.displayFor("issuetype", iss.IssueTypeID)
+	case "parent":
+		return iss.ParentKey, iss.ParentKey
+	case "duedate":
+		return iss.Duedate, iss.Duedate
+	case "assignee":
+		return iss.AssigneeID, s.displayFor("assignee", iss.AssigneeID)
+	case "fixVersions":
+		return "", joinNamed(iss.FixVersions)
+	case "components":
+		return "", joinNamed(iss.Components)
+	default:
+		return "", customValueString(iss.Custom[k])
+	}
+}
+
+func joinNamed(in []model.Named) string {
+	names := make([]string, 0, len(in))
+	for _, n := range in {
+		names = append(names, n.Name)
+	}
+	return strings.Join(names, " ")
+}
+
+func customValueString(v any) string {
+	switch t := v.(type) {
+	case nil:
+		return ""
+	case string:
+		return t
+	default:
+		b, _ := json.Marshal(t)
+		return string(b)
+	}
 }
 
 func (s *Store) applyUpdateOps(iss *model.Issue, update map[string]any) error {

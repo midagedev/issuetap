@@ -15,7 +15,7 @@ func TestNamedAddByNameMintsIntoNonEmptyCatalog(t *testing.T) {
 		"fixVersions": []any{
 			map[string]any{"add": map[string]any{"name": "gdk678-brand-new"}},
 		},
-	})
+	}, "")
 	if err != nil {
 		t.Fatalf("add by new name into non-empty catalog: %v", err)
 	}
@@ -31,7 +31,7 @@ func TestNamedAddByNameMintsIntoNonEmptyCatalog(t *testing.T) {
 		"fixVersions": []any{
 			map[string]any{"add": map[string]any{"id": "99999"}},
 		},
-	}); err == nil {
+	}, ""); err == nil {
 		t.Fatal("expected error for unknown fixVersions id")
 	}
 }

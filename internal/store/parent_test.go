@@ -81,7 +81,7 @@ func TestUpdateIssueRejectsSameLevelParent(t *testing.T) {
 	st := loadTiny(t)
 	err := st.UpdateIssue("TAP-2", map[string]any{
 		"parent": map[string]any{"key": "TAP-3"},
-	}, nil)
+	}, nil, "")
 	assertParentFieldError(t, err, "pid")
 	if st.Issue("TAP-2").ParentKey != "" {
 		t.Fatalf("rejected PUT still set ParentKey=%q", st.Issue("TAP-2").ParentKey)

@@ -715,7 +715,7 @@ func (s *Server) putIssue(w http.ResponseWriter, r *http.Request, key string) {
 		writeJiraError(w, http.StatusBadRequest, "Invalid request body")
 		return
 	}
-	if err := s.st.UpdateIssue(key, body.Fields, body.Update); err != nil {
+	if err := s.st.UpdateIssue(key, body.Fields, body.Update, s.identity(r).AccountID); err != nil {
 		if store.IsNotFound(err) {
 			writeJiraError(w, http.StatusNotFound, "Issue does not exist")
 			return

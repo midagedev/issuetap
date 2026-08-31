@@ -267,20 +267,63 @@ func TestRegisteredOptionHTTP(t *testing.T) {
 	}
 }
 
-func TestUnregisteredCustomFieldStillFree(t *testing.T) {
+// gadak GDK-1207: an unregistered field is HTTP 400 like Cloud, on PUT
+// and on POST /issue alike — never a silent write into Custom.
+func TestUnregisteredCustomFieldRejected(t *testing.T) {
 	ts := testServer(t, locale.EN, dialect.Cloud)
 	defer ts.Close()
 	res := authPut(t, ts, "/rest/api/3/issue/TAP-2", map[string]any{
 		"fields": map[string]any{"customfield_99999": map[string]any{"value": "loose"}},
 	})
-	res.Body.Close()
-	if res.StatusCode != 204 {
-		t.Fatalf("status %d", res.StatusCode)
+	status, body := decodeStatus(t, res)
+	if status != http.StatusBadRequest {
+		t.Fatalf("PUT status %d body=%v, want 400", status, body)
 	}
-	got := decode(t, authGet(t, ts, "/rest/api/3/issue/TAP-2?fields=customfield_99999"))
-	fields := got["fields"].(map[string]any)
-	if fields["customfield_99999"] == nil {
-		t.Fatal("unregistered custom field dropped")
+	errs, _ := body["errors"].(map[string]any)
+	if errs == nil || errs["customfield_99999"] == nil {
+		t.Fatalf("want errors.customfield_99999, got %v", body)
+	}
+
+	created := authPost(t, ts, "/rest/api/3/issue", map[string]any{
+		"fields": map[string]any{
+			"project":           map[string]any{"key": "TAP"},
+			"summary":           "with unknown field",
+			"customfield_99999": "loose",
+		},
+	})
+	status, body = decodeStatus(t, created)
+	if status != http.StatusBadRequest {
+		t.Fatalf("POST status %d body=%v, want 400", status, body)
+	}
+	errs, _ = body["errors"].(map[string]any)
+	if errs == nil || errs["customfield_99999"] == nil {
+		t.Fatalf("want errors.customfield_99999, got %v", body)
+	}
+}
+
+// gadak GDK-1207 render half: Custom pollution that predates the write
+// guard (an old persist file) must not shadow rendered system fields.
+func TestCustomPollutionCannotShadowRenderedFields(t *testing.T) {
+	doc := fixtures.Doc{
+		Projects: []fixtures.Project{{Key: "TAP", Name: "Tap"}},
+		Issues: []fixtures.Issue{{
+			Key: "TAP-1", Summary: "x", Project: "TAP",
+			Custom: map[string]any{"status": "polluted"},
+		}},
+	}
+	st := store.New(store.Options{Seed: 1, Locale: locale.EN})
+	if err := st.Apply(doc); err != nil {
+		t.Fatal(err)
+	}
+	cfg := config.Default()
+	cfg.Dialect.Kind = dialect.Cloud
+	ts := httptest.NewServer(api.New(cfg, st, nil, nil, false).Handler())
+	defer ts.Close()
+	got := decode(t, authGet(t, ts, "/rest/api/3/issue/TAP-1?fields=status"))
+	fields, _ := got["fields"].(map[string]any)
+	stObj, _ := fields["status"].(map[string]any)
+	if stObj == nil || stObj["statusCategory"] == nil {
+		t.Fatalf("GET status=%v, want the rendered system object", fields["status"])
 	}
 }
 

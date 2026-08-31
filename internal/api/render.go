@@ -231,7 +231,13 @@ func (s *Server) issueJSON(r *http.Request, iss *model.Issue, fields []string, e
 	} else {
 		full["resolution"] = nil
 	}
+	// Custom never shadows a rendered system field. The write path rejects
+	// system keys (gadak GDK-1207); this guards pollution already sitting in
+	// old persist files or authored fixtures.
 	for k, v := range iss.Custom {
+		if _, taken := full[k]; taken {
+			continue
+		}
 		full[k] = v
 	}
 

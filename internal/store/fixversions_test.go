@@ -186,20 +186,24 @@ func TestUpdateIssueComponentsUnknownID(t *testing.T) {
 	}
 }
 
-func TestUpdateIssueUnknownSystemKeyStillCustom(t *testing.T) {
+// gadak GDK-1207: a system key outside the editable switch is a
+// FieldError, never a Custom write.
+func TestUpdateIssueUnknownSystemKeyRejected(t *testing.T) {
 	st := loadTiny(t)
 	before := append([]model.Named{}, st.Issue("TAP-2").Versions...)
-	if err := st.UpdateIssue("TAP-2", map[string]any{
+	err := st.UpdateIssue("TAP-2", map[string]any{
 		"versions": []any{map[string]any{"name": "should-stay-custom"}},
-	}, nil); err != nil {
-		t.Fatal(err)
+	}, nil)
+	fe, ok := AsFieldError(err)
+	if !ok || fe.Field != "versions" {
+		t.Fatalf("want FieldError{Field:versions}, got %T %v", err, err)
 	}
 	iss := st.Issue("TAP-2")
-	if iss.Custom["versions"] == nil {
-		t.Fatal("unknown system key versions was not stored in Custom")
+	if iss.Custom["versions"] != nil {
+		t.Fatal("rejected write still landed in Custom")
 	}
 	if len(iss.Versions) != len(before) {
-		t.Fatalf("typed Versions mutated (%+v); this round only promotes fixVersions and components", iss.Versions)
+		t.Fatalf("typed Versions mutated (%+v)", iss.Versions)
 	}
 }
 

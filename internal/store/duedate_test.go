@@ -126,15 +126,19 @@ func TestRegisteredOptionAcceptsKnownID(t *testing.T) {
 	}
 }
 
-func TestUnregisteredCustomFieldStillFree(t *testing.T) {
+// gadak GDK-1207: an unregistered field is a FieldError, never a free
+// write into Custom.
+func TestUnregisteredCustomFieldRejected(t *testing.T) {
 	st := loadTiny(t)
-	if err := st.UpdateIssue("TAP-2", map[string]any{
+	err := st.UpdateIssue("TAP-2", map[string]any{
 		"customfield_99999": map[string]any{"value": "whatever"},
-	}, nil); err != nil {
-		t.Fatal(err)
+	}, nil)
+	fe, ok := AsFieldError(err)
+	if !ok || fe.Field != "customfield_99999" {
+		t.Fatalf("want FieldError{Field:customfield_99999}, got %T %v", err, err)
 	}
-	if st.Issue("TAP-2").Custom["customfield_99999"] == nil {
-		t.Fatal("unregistered custom field dropped")
+	if st.Issue("TAP-2").Custom["customfield_99999"] != nil {
+		t.Fatal("rejected write still landed in Custom")
 	}
 }
 

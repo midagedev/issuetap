@@ -127,7 +127,8 @@ func (s *Store) namedAllowedValues(project, field string) []any {
 
 // EditMeta is the fields object of GET /issue/{key}/editmeta.
 // System fields and registered custom fields share this table; UpdateIssue
-// accepts every id this function advertises.
+// accepts every id this function advertises and rejects every other id
+// (gadak GDK-1207).
 func (s *Store) EditMeta(key string) (map[string]any, error) {
 	iss := s.Issue(key)
 	if iss == nil {
@@ -375,10 +376,15 @@ func fixtureFieldsFromStore(fields []model.FieldInfo) []fixtures.Field {
 
 
 
+// validateCustomWriteLocked gates the Custom namespace: only a registered
+// custom field may enter. An unregistered id — or a system id outside the
+// UpdateIssue/CreateIssue switches — is Cloud's screen/unknown 400, never a
+// silent Custom write that would shadow the rendered system object on GET
+// (gadak GDK-1207).
 func (s *Store) validateCustomWriteLocked(id string, v any) error {
 	f := s.fieldByIDLocked(id)
 	if f == nil || !f.Custom {
-		return nil
+		return FieldError{Field: id, Msg: "Field '" + id + "' cannot be set. It is not on the appropriate screen, or unknown."}
 	}
 	switch fieldKind(*f) {
 	case KindOption:

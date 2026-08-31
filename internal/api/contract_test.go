@@ -33,7 +33,7 @@ package api_test
 // | writes: comment / transition / assignee | TestWrites | TestWriteMissingIssue |
 // | GET /issueLinkType catalog 4 types | TestIssueLinkTypeCatalog | TestPostIssueLinkUnknownType404 |
 // | POST /issueLink both sides + persist | TestPostIssueLinkStoresBothSides / TestPostIssueLinkSurvivesPersistReload | TestPostIssueLinkMissingIssue404 / TestPostIssueLinkSelf400 / TestPostIssueLinkIdempotentDoesNotDuplicate |
-// | writes: fixVersions/components typed (not Custom) | TestPutFixVersionsAddByIDThenJQL / TestPutComponentsAddByNameThenJQL / TestPutFixVersionsFieldsReplaceThenJQL / TestPutComponentsFieldsReplaceThenJQL | TestPutFixVersionsUnknownIDIs400 / TestPutFixVersionsFieldsUnknownIDIs400 / TestPutUnknownSystemKeyStillCustom |
+// | writes: fixVersions/components typed (not Custom) | TestPutFixVersionsAddByIDThenJQL / TestPutComponentsAddByNameThenJQL / TestPutFixVersionsFieldsReplaceThenJQL / TestPutComponentsFieldsReplaceThenJQL | TestPutFixVersionsUnknownIDIs400 / TestPutFixVersionsFieldsUnknownIDIs400 / TestPutUnknownSystemKeyRejected |
 // | GET transitions expand=transitions.fields | TestTransitionsExpandFieldsAlwaysPresent | TestTransitionsWithoutExpandOmitFields |
 // | POST transition fields.resolution | TestTransitionStoresRequestedResolution | TestTransitionRequiredResolution / TestTransitionRejectsFieldsWithoutScreen / TestTransitionRejectsUnknownResolution |
 // | POST done without fields defaults 10000 | TestTransitionDoneDefaultsResolution | TestTransitionClearsResolutionLeavingDone |
@@ -44,7 +44,7 @@ package api_test
 // | Create meta pagination | TestCreateMetaFieldsPagination | TestCreateMetaFieldsPaginationEmptyPage |
 // | Create advertised required ↔ POST | TestCreateMetaFieldsRoundTrip | TestCreateIssueRejectsEmptySummary |
 // | Parent hierarchy (level+1, exist) | TestPostIssueAcceptsLegalHierarchy | TestPostIssueRejectsSameLevelParent / TestPutIssueRejectsSameLevelParentWithPidKey |
-// | Custom option registry validation | TestRegisteredOptionRejectsUnknownID | TestUnregisteredCustomFieldStillFree |
+// | Custom option registry validation | TestRegisteredOptionRejectsUnknownID | TestUnregisteredCustomFieldRejected |
 // | DC startAt search | TestDCSearch | TestDCWikiMarkupBody |
 // | determinism: same seed → same snapshot | TestDeterminism | (diff empty) |
 

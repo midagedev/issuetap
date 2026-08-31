@@ -5,7 +5,6 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"testing"
 
 	"github.com/midagedev/issuetap/internal/dialect"
@@ -194,23 +193,34 @@ func TestPutFixVersionsFieldsUnknownIDIs400(t *testing.T) {
 	}
 }
 
-func TestPutUnknownSystemKeyStillCustom(t *testing.T) {
+// gadak GDK-1207: a system key outside the editable set must be rejected
+// like Cloud, never stored into Custom where the render loop would let it
+// shadow the rendered system object on GET.
+func TestPutUnknownSystemKeyRejected(t *testing.T) {
 	ts := testServer(t, locale.EN, dialect.Cloud)
 	defer ts.Close()
-	res := authPut(t, ts, "/rest/api/3/issue/TAP-2", map[string]any{
-		"fields": map[string]any{
-			"versions": []any{map[string]any{"name": "stay-custom"}},
-		},
-	})
-	status, body := decodeStatus(t, res)
-	if status != http.StatusNoContent {
-		t.Fatalf("unknown key status %d body=%v, want 204 (Custom)", status, body)
+	for _, field := range []string{"status", "versions"} {
+		var v any = map[string]any{"id": "3"}
+		if field == "versions" {
+			v = []any{map[string]any{"name": "stay-custom"}}
+		}
+		res := authPut(t, ts, "/rest/api/3/issue/TAP-2", map[string]any{
+			"fields": map[string]any{field: v},
+		})
+		status, body := decodeStatus(t, res)
+		if status != http.StatusBadRequest {
+			t.Fatalf("%s write status %d body=%v, want 400", field, status, body)
+		}
+		errs, _ := body["errors"].(map[string]any)
+		if errs == nil || errs[field] == nil {
+			t.Fatalf("want errors.%s, got %v", field, body)
+		}
 	}
-	got := decode(t, authGet(t, ts, "/rest/api/3/issue/TAP-2?fields=versions"))
+	got := decode(t, authGet(t, ts, "/rest/api/3/issue/TAP-2?fields=status"))
 	fields, _ := got["fields"].(map[string]any)
-	raw, _ := json.Marshal(fields["versions"])
-	if !strings.Contains(string(raw), "stay-custom") {
-		t.Fatalf("GET versions=%s, want Custom overlay of the write", raw)
+	st, _ := fields["status"].(map[string]any)
+	if st == nil || st["statusCategory"] == nil {
+		t.Fatalf("GET status=%v, want the rendered system object", fields["status"])
 	}
 }
 

@@ -193,19 +193,22 @@ func TestPostIssueLinkStoresBothSides(t *testing.T) {
 	io.Copy(io.Discard, res.Body)
 	res.Body.Close()
 
+	// Real Jira labels each projection by the OTHER end's POST role
+	// (measured on Cloud — gadak GDK-1204): the POSTed outwardIssue carries
+	// an inwardIssue element and displays type.inward, and vice versa.
 	a := issueLinksOf(t, ts, "TAP-1")
 	b := issueLinksOf(t, ts, "TAP-3")
-	if directedLinkCount(a, "Blocks", "outwardIssue", "TAP-3") != 1 {
-		t.Fatalf("TAP-1 missing outwardIssue TAP-3 Blocks: %v", a)
+	if directedLinkCount(a, "Blocks", "inwardIssue", "TAP-3") != 1 {
+		t.Fatalf("TAP-1 missing inwardIssue TAP-3 Blocks: %v", a)
 	}
-	if directedLinkCount(a, "Blocks", "inwardIssue", "TAP-3") != 0 {
-		t.Fatalf("TAP-1 should not have inwardIssue TAP-3: %v", a)
+	if directedLinkCount(a, "Blocks", "outwardIssue", "TAP-3") != 0 {
+		t.Fatalf("TAP-1 should not have outwardIssue TAP-3: %v", a)
 	}
-	if directedLinkCount(b, "Blocks", "inwardIssue", "TAP-1") != 1 {
-		t.Fatalf("TAP-3 missing inwardIssue TAP-1 Blocks: %v", b)
+	if directedLinkCount(b, "Blocks", "outwardIssue", "TAP-1") != 1 {
+		t.Fatalf("TAP-3 missing outwardIssue TAP-1 Blocks: %v", b)
 	}
-	if directedLinkCount(b, "Blocks", "outwardIssue", "TAP-1") != 0 {
-		t.Fatalf("TAP-3 should not have outwardIssue TAP-1: %v", b)
+	if directedLinkCount(b, "Blocks", "inwardIssue", "TAP-1") != 0 {
+		t.Fatalf("TAP-3 should not have inwardIssue TAP-1: %v", b)
 	}
 }
 
@@ -222,11 +225,11 @@ func TestPostIssueLinkByName(t *testing.T) {
 
 	a := issueLinksOf(t, ts, "TAP-2")
 	b := issueLinksOf(t, ts, "TAP-3")
-	if directedLinkCount(a, "Blocks", "outwardIssue", "TAP-3") != 1 {
-		t.Fatalf("TAP-2 missing outward TAP-3: %v", a)
+	if directedLinkCount(a, "Blocks", "inwardIssue", "TAP-3") != 1 {
+		t.Fatalf("TAP-2 missing inwardIssue TAP-3: %v", a)
 	}
-	if directedLinkCount(b, "Blocks", "inwardIssue", "TAP-2") != 1 {
-		t.Fatalf("TAP-3 missing inward TAP-2: %v", b)
+	if directedLinkCount(b, "Blocks", "outwardIssue", "TAP-2") != 1 {
+		t.Fatalf("TAP-3 missing outwardIssue TAP-2: %v", b)
 	}
 }
 
@@ -247,7 +250,7 @@ func TestPostIssueLinkAcceptsIssueIDs(t *testing.T) {
 	res.Body.Close()
 
 	a := issueLinksOf(t, ts, "TAP-2")
-	if directedLinkCount(a, "Blocks", "outwardIssue", "TAP-3") != 1 {
+	if directedLinkCount(a, "Blocks", "inwardIssue", "TAP-3") != 1 {
 		t.Fatalf("id lookup did not store TAP-2→TAP-3: %v", a)
 	}
 }
@@ -324,13 +327,15 @@ func TestPostIssueLinkIdempotentDoesNotDuplicate(t *testing.T) {
 		t.Fatalf("fixture TAP-1 Relates outward TAP-2 count=%d, want 1", before)
 	}
 
-	res := postIssueLink(t, ts, issueLinkPayload("10003", "", "TAP-1", "TAP-2"))
+	// The fixture element on TAP-1 names TAP-2 as outwardIssue, so in Jira
+	// convention TAP-2 is the link's outward end — the heal POST says so.
+	res := postIssueLink(t, ts, issueLinkPayload("10003", "", "TAP-2", "TAP-1"))
 	if res.StatusCode != http.StatusCreated {
 		status, msgs := jiraErrorMessages(t, res)
 		t.Fatalf("first duplicate POST status %d, want 201; errorMessages=%s", status, msgs)
 	}
 	res.Body.Close()
-	res = postIssueLink(t, ts, issueLinkPayload("", "Relates", "TAP-1", "TAP-2"))
+	res = postIssueLink(t, ts, issueLinkPayload("", "Relates", "TAP-2", "TAP-1"))
 	if res.StatusCode != http.StatusCreated {
 		status, msgs := jiraErrorMessages(t, res)
 		t.Fatalf("second duplicate POST status %d, want 201; errorMessages=%s", status, msgs)
@@ -390,12 +395,12 @@ func TestPostIssueLinkSurvivesPersistReload(t *testing.T) {
 	}
 	foundOut, foundIn := false, false
 	for _, l := range a.Links {
-		if l.TypeName == "Blocks" && l.OutwardKey == "TAP-3" {
+		if l.TypeName == "Blocks" && l.InwardKey == "TAP-3" {
 			foundOut = true
 		}
 	}
 	for _, l := range b.Links {
-		if l.TypeName == "Blocks" && l.InwardKey == "TAP-1" {
+		if l.TypeName == "Blocks" && l.OutwardKey == "TAP-1" {
 			foundIn = true
 		}
 	}

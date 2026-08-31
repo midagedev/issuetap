@@ -1442,11 +1442,20 @@ var ErrSelfLink = errors.New("Cannot link an issue to itself.")
 // AddIssueLink is POST /rest/api/3/issueLink. typeID or typeName selects a
 // catalog row (id wins). Issue refs are keys or ids, same lookup as parent.
 //
+// Direction follows real Jira, which labels each issue's projection by the
+// OTHER end's POST role: the issue posted as outwardIssue gets an
+// inwardIssue element (and so displays type.inward), the issue posted as
+// inwardIssue gets an outwardIssue element (type.outward). Measured on
+// Cloud with blocks and split from (gadak GDK-1204, gadak PR #79); until
+// then this store held the mirror image and standalone read the opposite
+// phrase from the one Cloud showed for the same POST.
+//
 // Duplicate handling: the same catalog type + same outward key + same
 // inward key is a successful no-op. HTTP still returns 201, but a second
 // issuelinks element is not appended — a gadak link retry then cannot grow
 // the mirror on re-read. A one-sided fixture row is healed by writing the
-// missing side only.
+// missing side only; fixture rows are authored in this same Jira
+// convention.
 func (s *Store) AddIssueLink(typeID, typeName, outwardRef, inwardRef string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -1473,12 +1482,12 @@ func (s *Store) AddIssueLink(typeID, typeName, outwardRef, inwardRef string) err
 	}
 
 	added := false
-	if !issueHasDirectedLink(outward, lt.Name, true, inward.Key) {
-		outward.Links = append(outward.Links, model.IssueLink{TypeName: lt.Name, OutwardKey: inward.Key})
+	if !issueHasDirectedLink(outward, lt.Name, false, inward.Key) {
+		outward.Links = append(outward.Links, model.IssueLink{TypeName: lt.Name, InwardKey: inward.Key})
 		added = true
 	}
-	if !issueHasDirectedLink(inward, lt.Name, false, outward.Key) {
-		inward.Links = append(inward.Links, model.IssueLink{TypeName: lt.Name, InwardKey: outward.Key})
+	if !issueHasDirectedLink(inward, lt.Name, true, outward.Key) {
+		inward.Links = append(inward.Links, model.IssueLink{TypeName: lt.Name, OutwardKey: outward.Key})
 		added = true
 	}
 	if !added {

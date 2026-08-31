@@ -25,6 +25,8 @@ func TestIssueLinkTypesMatchesModelCatalog(t *testing.T) {
 	}
 }
 
+// Jira labels each projection by the OTHER end's POST role (GDK-1204): the
+// outward issue carries an inwardIssue element and vice versa.
 func TestAddIssueLinkStoresBothSides(t *testing.T) {
 	st := loadTiny(t)
 	if err := st.AddIssueLink("10000", "", "TAP-1", "TAP-3"); err != nil {
@@ -32,11 +34,11 @@ func TestAddIssueLinkStoresBothSides(t *testing.T) {
 	}
 	a := st.Issue("TAP-1")
 	b := st.Issue("TAP-3")
-	if !issueHasDirectedLink(a, "Blocks", true, "TAP-3") {
-		t.Fatalf("TAP-1 missing outward TAP-3: %+v", a.Links)
+	if !issueHasDirectedLink(a, "Blocks", false, "TAP-3") {
+		t.Fatalf("TAP-1 missing inward element for TAP-3: %+v", a.Links)
 	}
-	if !issueHasDirectedLink(b, "Blocks", false, "TAP-1") {
-		t.Fatalf("TAP-3 missing inward TAP-1: %+v", b.Links)
+	if !issueHasDirectedLink(b, "Blocks", true, "TAP-1") {
+		t.Fatalf("TAP-3 missing outward element for TAP-1: %+v", b.Links)
 	}
 }
 
@@ -45,7 +47,7 @@ func TestAddIssueLinkByNameAndIssueID(t *testing.T) {
 	if err := st.AddIssueLink("", "Blocks", "10002", "10003"); err != nil {
 		t.Fatal(err)
 	}
-	if !issueHasDirectedLink(st.Issue("TAP-2"), "Blocks", true, "TAP-3") {
+	if !issueHasDirectedLink(st.Issue("TAP-2"), "Blocks", false, "TAP-3") {
 		t.Fatal("name+id lookup did not store TAP-2→TAP-3")
 	}
 }
@@ -83,10 +85,13 @@ func TestAddIssueLinkSelf(t *testing.T) {
 
 func TestAddIssueLinkIdempotent(t *testing.T) {
 	st := loadTiny(t)
-	if err := st.AddIssueLink("10003", "", "TAP-1", "TAP-2"); err != nil {
+	// tiny.yaml already gives TAP-1 an outward Relates element for TAP-2 —
+	// in Jira convention that is the link whose outward end is TAP-2, so the
+	// heal POST names TAP-2 as outwardIssue.
+	if err := st.AddIssueLink("10003", "", "TAP-2", "TAP-1"); err != nil {
 		t.Fatal(err)
 	}
-	if err := st.AddIssueLink("", "Relates", "TAP-1", "TAP-2"); err != nil {
+	if err := st.AddIssueLink("", "Relates", "TAP-2", "TAP-1"); err != nil {
 		t.Fatal(err)
 	}
 	n := 0
@@ -128,10 +133,10 @@ func TestAddIssueLinkSurvivesPersistReload(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer st2.Close()
-	if !issueHasDirectedLink(st2.Issue("TAP-1"), "Blocks", true, "TAP-3") {
+	if !issueHasDirectedLink(st2.Issue("TAP-1"), "Blocks", false, "TAP-3") {
 		t.Fatalf("TAP-1 link lost: %+v", st2.Issue("TAP-1").Links)
 	}
-	if !issueHasDirectedLink(st2.Issue("TAP-3"), "Blocks", false, "TAP-1") {
+	if !issueHasDirectedLink(st2.Issue("TAP-3"), "Blocks", true, "TAP-1") {
 		t.Fatalf("TAP-3 link lost: %+v", st2.Issue("TAP-3").Links)
 	}
 }

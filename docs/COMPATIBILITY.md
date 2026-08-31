@@ -84,9 +84,12 @@ Jira layout `2006-01-02T15:04:05.000-0700`.
 
 JQL subset: `project`, `key`, `updated`, `created`, `status`,
 `statusCategory`, `issuetype`/`type`, `priority`, `assignee`, `reporter`,
-`fixVersion`, `component`,
-`AND`/`OR`/`NOT`, `IN`, `ORDER BY`. Unparseable JQL is HTTP 400 — the
-server does not silently return every issue.
+`summary`, `labels`, `fixVersion`, `component`,
+`AND`/`OR`/`NOT`, `IN`, `ORDER BY` (`updated`/`created`/`key`).
+Unparseable JQL is HTTP 400 — the server does not silently return every
+issue. A clause or ORDER BY naming a field outside that set is HTTP 400
+too (Cloud's unknown-field message plus the supported list), never a
+silent 0-rows/all-rows evaluation or a silent key-order fallback.
 
 CQL subset: `space`, `type=page|comment`, `lastModified >=`, `ORDER BY`.
 Unsupported clauses are HTTP 400.

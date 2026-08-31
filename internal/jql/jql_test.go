@@ -1,7 +1,11 @@
 package jql
 
 import (
+	"path/filepath"
+	"strings"
 	"testing"
+
+	"github.com/midagedev/issuetap/internal/fixtures"
 
 	"github.com/midagedev/issuetap/internal/model"
 )
@@ -100,5 +104,77 @@ func TestFilterComponent(t *testing.T) {
 	got := Filter(issues, q, Lookup{}, 0, -1)
 	if len(got) != 1 || got[0].Key != "TAP-1" {
 		t.Fatalf("%v", got)
+	}
+}
+
+// gadak GDK-1209: an unknown field used to evaluate to nil values — `=`
+// matched nothing (silent 0 rows), `!=` matched everything — and an
+// unknown ORDER BY field silently fell back to key order. Both are now
+// honest errors, the CQL pattern.
+func TestParseUnknownFieldRejected(t *testing.T) {
+	for _, raw := range []string{
+		`sprint = 5`,
+		`resolution != Done AND project = TAP`,
+		`project = TAP OR epic in (A, B)`,
+		`text ~ "foo"`,
+	} {
+		_, err := Parse(raw)
+		if err == nil {
+			t.Errorf("Parse(%q) accepted an unknown field", raw)
+			continue
+		}
+		if !strings.Contains(err.Error(), "does not exist") {
+			t.Errorf("Parse(%q) error %q, want the Cloud unknown-field message", raw, err)
+		}
+	}
+}
+
+func TestParseKnownFieldsStillAccepted(t *testing.T) {
+	for _, raw := range []string{
+		`project = TAP AND status != Done ORDER BY updated DESC`,
+		`statusCategory = indeterminate AND type = Bug`,
+		`fixVersion = "2026.8" OR component = Core`,
+		`summary = x AND labels in (a, b) ORDER BY created ASC, key DESC`,
+	} {
+		if _, err := Parse(raw); err != nil {
+			t.Errorf("Parse(%q): %v", raw, err)
+		}
+	}
+}
+
+func TestParseUnknownOrderByRejected(t *testing.T) {
+	for _, raw := range []string{
+		"ORDER BY rank DESC",
+		"project = TAP ORDER BY priority",
+	} {
+		_, err := Parse(raw)
+		if err == nil {
+			t.Errorf("Parse(%q) accepted an unsupported sort field", raw)
+			continue
+		}
+		if !strings.Contains(err.Error(), "sort") {
+			t.Errorf("Parse(%q) error %q, want a sort-field message", raw, err)
+		}
+	}
+}
+
+// Every stored filter a fixture ships must survive the field whitelist —
+// otherwise GET /filter/my hands out JQL whose execution is a 400
+// (gadak GDK-1209's "saved but unrunnable" shape).
+func TestExampleFixtureFilterJQLParses(t *testing.T) {
+	paths, err := filepath.Glob(filepath.Join(fixtures.RepoRoot(), "examples", "fixtures", "*.yaml"))
+	if err != nil || len(paths) == 0 {
+		t.Fatalf("glob: %v (%d files)", err, len(paths))
+	}
+	for _, p := range paths {
+		doc, err := fixtures.Load(p)
+		if err != nil {
+			t.Fatalf("%s: %v", p, err)
+		}
+		for _, f := range doc.Filters {
+			if _, err := Parse(f.JQL); err != nil {
+				t.Errorf("%s filter %q: %v", filepath.Base(p), f.JQL, err)
+			}
+		}
 	}
 }

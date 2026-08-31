@@ -12,6 +12,10 @@
 //
 // An empty query or a bare ORDER BY matches every issue. Unparseable JQL
 // is an error — returning every row would look like a working search.
+// A clause or ORDER BY naming a field outside the supported set is an
+// error too, the CQL pattern: an unknown field used to evaluate to nil,
+// so `=` silently matched nothing and `!=` matched everything, and an
+// unknown sort field silently fell back to key order (gadak GDK-1209).
 package jql
 
 import (
@@ -79,6 +83,21 @@ type pred struct {
 	op    cmpOp
 	vals  []string
 }
+
+// searchableFields mirrors the pred.values switch — the two must stay in
+// lockstep, or a field validates and then evaluates to nothing.
+var searchableFields = map[string]bool{
+	"project": true, "key": true, "updated": true, "created": true,
+	"status": true, "statuscategory": true, "issuetype": true, "type": true,
+	"priority": true, "assignee": true, "reporter": true, "summary": true,
+	"labels": true, "fixversion": true, "fixversions": true,
+	"component": true, "components": true,
+}
+
+const searchableList = "project, key, updated, created, status, statusCategory, issuetype, type, priority, assignee, reporter, summary, labels, fixVersion, component"
+
+// sortableFields mirrors orderVal.
+var sortableFields = map[string]bool{"updated": true, "created": true, "key": true}
 
 type andN struct{ kids []node }
 type orN struct{ kids []node }
@@ -544,6 +563,9 @@ func (p *parser) splitOrder() (string, []Order, error) {
 			return body, nil, fmt.Errorf("jql: ORDER BY expected field, got %q", rest[0].val)
 		}
 		field := strings.ToLower(rest[0].val)
+		if !sortableFields[field] {
+			return body, nil, fmt.Errorf("Not able to sort using field '%s'. Sortable fields: updated, created, key", rest[0].val)
+		}
 		rest = rest[1:]
 		desc := false
 		if len(rest) > 0 && rest[0].kind == kIdent {
@@ -656,6 +678,9 @@ func (p *parser) parsePred() (node, error) {
 		return nil, fmt.Errorf("jql: expected field, got %q", t.val)
 	}
 	field := strings.ToLower(t.val)
+	if !searchableFields[field] {
+		return nil, fmt.Errorf("Field '%s' does not exist or you do not have permission to view it. Supported fields: %s", t.val, searchableList)
+	}
 	// not in
 	if p.takeIdent("not") {
 		if !p.takeIdent("in") {

@@ -41,14 +41,18 @@ func TestFixtureCatalogEvictsShadowedDefaults(t *testing.T) {
 	// own, whose ids only partly overlap the seeded defaults.
 	doc := fixtures.Doc{
 		IssueTypes: []fixtures.IssueType{
-			{ID: "10001", Name: "Epic", HierarchyLevel: 1},
+			// The stored name is the source site's, in its own language.
+			// It is the locale overlay that renders both this and the
+			// seeded 10000 as "Epic" — which is why comparing the raw
+			// stored names never saw the collision.
+			{ID: "10001", Name: "에픽", HierarchyLevel: 1},
 			{ID: "10002", Name: "Sub-task", HierarchyLevel: -1, Subtask: true},
 			{ID: "10003", Name: "Task"},
 			{ID: "10007", Name: "Bug"},
 		},
 		Statuses: []fixtures.Status{
 			{ID: "10000", Name: "To Do", Category: "new"},
-			{ID: "10001", Name: "In Progress", Category: "indeterminate"},
+			{ID: "10001", Name: "진행 중", Category: "indeterminate"},
 			{ID: "10003", Name: "Done", Category: "done"},
 		},
 	}

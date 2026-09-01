@@ -25,6 +25,7 @@ import (
 	"sync/atomic"
 
 	"github.com/midagedev/issuetap/internal/fixtures"
+	"github.com/midagedev/issuetap/internal/locale"
 	"github.com/midagedev/issuetap/internal/model"
 
 	_ "modernc.org/sqlite"
@@ -790,12 +791,13 @@ func (s *Store) clearPrioritiesLocked() {
 func (s *Store) evictShadowedTypesLocked(incoming []fixtures.IssueType) {
 	byName := map[string]string{}
 	for _, t := range incoming {
-		if t.Name != "" {
-			byName[t.Name] = t.ID
+		if n := locale.IssueTypeName(s.loc, t.ID, t.Name); n != "" {
+			byName[n] = t.ID
 		}
 	}
 	for _, t := range s.typesLocked() {
-		if id, ok := byName[t.Name]; ok && id != t.ID {
+		n := locale.IssueTypeName(s.loc, t.ID, t.Name)
+		if id, ok := byName[n]; ok && id != t.ID {
 			s.sqlExec(`DELETE FROM issue_types WHERE id=?`, t.ID)
 		}
 	}
@@ -806,12 +808,13 @@ func (s *Store) evictShadowedTypesLocked(incoming []fixtures.IssueType) {
 func (s *Store) evictShadowedStatusesLocked(incoming []fixtures.Status) {
 	byName := map[string]string{}
 	for _, st := range incoming {
-		if st.Name != "" {
-			byName[st.Name] = st.ID
+		if n := locale.StatusName(s.loc, st.ID, st.Name); n != "" {
+			byName[n] = st.ID
 		}
 	}
 	for _, st := range s.statusesLocked() {
-		if id, ok := byName[st.Name]; ok && id != st.ID {
+		n := locale.StatusName(s.loc, st.ID, st.Name)
+		if id, ok := byName[n]; ok && id != st.ID {
 			s.sqlExec(`DELETE FROM statuses WHERE id=?`, st.ID)
 		}
 	}

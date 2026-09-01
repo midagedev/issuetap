@@ -48,18 +48,11 @@ type Store struct {
 	// locale — what a live Cloud site does (gadak GDK-597).
 	prioNamesEnglish bool
 
-	// Sequence counters stay in-process under mu. They are re-seeded
-	// from max(id) on Open of an existing DB. Clock/locale/seed live
-	// here and, when persist is armed, in store_meta.
-	seqIssue   int
-	seqComment int
-	seqHist    int
-	seqAttach  int
-	seqPage    int
-	seqUser    int
-	seqProj    int
-	seqSpace   int
-
+	// Sequence counters live in the working copy (store_meta "seq:*"
+	// rows, nextSeqLocked), not in process memory: the persist is one
+	// working copy shared by every process that opened it, and counters
+	// seeded once at Open handed the same id to different issues
+	// (gadak GDK-1180). Clock/locale/seed live in store_meta too.
 	persist *persistState
 }
 
@@ -447,7 +440,7 @@ func (s *Store) seedSeqsLocked() {
 			return
 		}
 		// Runtime ids: issue comments 90000+seq, page comments 30000+seq
-		// (both share seqComment). Authored ids outside those bands are
+		// (both share the "comment" counter). Authored ids outside those bands are
 		// left alone — they cannot be regenerated anyway.
 		if n > 90000 && n-90000 > maxC {
 			maxC = n - 90000
@@ -476,16 +469,19 @@ func (s *Store) seedSeqsLocked() {
 			bumpComment(c.ID)
 		}
 	}
-	if maxC > s.seqComment {
-		s.seqComment = maxC
+	s.floorSeqLocked("comment", maxC)
+	s.floorSeqLocked("attach", maxA)
+	s.floorSeqLocked("hist", maxH)
+	// Runtime space ids: 40000+seq. Old persists carry no "seq:space" row,
+	// so a restart used to re-mint from zero into the occupied band.
+	maxS := 0
+	for _, sp := range s.spacesLocked() {
+		if n, err := strconv.Atoi(sp.ID); err == nil && n > 40000 && n-40000 > maxS {
+			maxS = n - 40000
+		}
 	}
-	if maxA > s.seqAttach {
-		s.seqAttach = maxA
-	}
-	if maxH > s.seqHist {
-		s.seqHist = maxH
-	}
-	// Runtime page ids: 20000+seqPage. Authored ids outside that band
+	s.floorSeqLocked("space", maxS)
+	// Runtime page ids: 20000+seq. Authored ids outside that band
 	// (and comment ids in 30000+) are left alone.
 	maxP := 0
 	for _, id := range s.pageIDsLocked() {
@@ -497,9 +493,7 @@ func (s *Store) seedSeqsLocked() {
 			maxP = n - 20000
 		}
 	}
-	if maxP > s.seqPage {
-		s.seqPage = maxP
-	}
+	s.floorSeqLocked("page", maxP)
 }
 
 // seedClockLocked jumps the deterministic clock past every timestamp in
@@ -550,7 +544,7 @@ func (s *Store) seedClockLocked() {
 	}
 }
 
-// seedIssueSeqLocked sets seqIssue from the highest existing numeric issue
+// seedIssueSeqLocked floors the "issue" counter from the highest existing numeric issue
 // id so CreateIssue does not reuse a fixture id (10000+seq).
 func (s *Store) seedIssueSeqLocked() {
 	max := 0
@@ -564,15 +558,14 @@ func (s *Store) seedIssueSeqLocked() {
 		}
 	}
 	if max >= 10000 {
-		s.seqIssue = max - 10000
+		s.floorSeqLocked("issue", max-10000)
 	}
 }
 
 func (s *Store) putUser(u fixtures.User) *model.User {
 	id := u.AccountID
 	if id == "" {
-		s.seqUser++
-		id = fmt.Sprintf("5b10a2844c20165700ede%03d", s.seqUser)
+		id = fmt.Sprintf("5b10a2844c20165700ede%03d", s.nextSeqLocked("user"))
 	}
 	active := true
 	if u.Active != nil {
@@ -607,8 +600,7 @@ func avatarURLs(id string) map[string]string {
 func (s *Store) putProject(p fixtures.Project) {
 	id := p.ID
 	if id == "" {
-		s.seqProj++
-		id = strconv.Itoa(10000 + s.seqProj)
+		id = strconv.Itoa(10000 + s.nextSeqLocked("proj"))
 	}
 	typ := p.TypeKey
 	if typ == "" {
@@ -660,8 +652,7 @@ func (s *Store) putStatus(st fixtures.Status) {
 func (s *Store) putSpace(p fixtures.Space) {
 	id := p.ID
 	if id == "" {
-		s.seqSpace++
-		id = strconv.Itoa(40000 + s.seqSpace)
+		id = strconv.Itoa(40000 + s.nextSeqLocked("space"))
 	}
 	typ := p.Type
 	if typ == "" {
@@ -676,8 +667,7 @@ func (s *Store) putSpace(p fixtures.Space) {
 func (s *Store) putIssue(in fixtures.Issue) error {
 	id := in.ID
 	if id == "" {
-		s.seqIssue++
-		id = strconv.Itoa(10000 + s.seqIssue)
+		id = strconv.Itoa(10000 + s.nextSeqLocked("issue"))
 	}
 	project := in.Project
 	if project == "" {
@@ -788,8 +778,7 @@ func (s *Store) putIssue(in fixtures.Issue) error {
 func (s *Store) makeComment(c fixtures.Comment, fallback string) model.Comment {
 	id := c.ID
 	if id == "" {
-		s.seqComment++
-		id = strconv.Itoa(90000 + s.seqComment)
+		id = strconv.Itoa(90000 + s.nextSeqLocked("comment"))
 	}
 	created := first(c.Created, fallback)
 	updated := first(c.Updated, created)
@@ -815,8 +804,7 @@ func (s *Store) makeComment(c fixtures.Comment, fallback string) model.Comment {
 func (s *Store) makeAttach(a fixtures.Attachment, fallback string) (model.Attachment, error) {
 	id := a.ID
 	if id == "" {
-		s.seqAttach++
-		id = strconv.Itoa(70000 + s.seqAttach)
+		id = strconv.Itoa(70000 + s.nextSeqLocked("attach"))
 	}
 	mime := a.MimeType
 	if mime == "" {
@@ -847,8 +835,7 @@ func (s *Store) makeAttach(a fixtures.Attachment, fallback string) (model.Attach
 func (s *Store) makeHistory(h fixtures.History, iss *model.Issue) model.History {
 	id := h.ID
 	if id == "" {
-		s.seqHist++
-		id = "h" + strconv.Itoa(s.seqHist)
+		id = "h" + strconv.Itoa(s.nextSeqLocked("hist"))
 	}
 	out := model.History{ID: id, Created: h.At, Author: *s.userOrDefault(h.Author)}
 	for _, it := range h.Items {
@@ -878,8 +865,7 @@ func (s *Store) synthesizeHistory(iss *model.Issue) []model.History {
 	if firstNew == nil || iss.StatusID == "" || iss.StatusID == firstNew.ID {
 		return nil
 	}
-	s.seqHist++
-	id := "h" + strconv.Itoa(s.seqHist)
+	id := "h" + strconv.Itoa(s.nextSeqLocked("hist"))
 	at := iss.Updated
 	if iss.Created != "" {
 		// Midpoint-ish: use updated so clients see a change after create.
@@ -914,8 +900,7 @@ func (s *Store) firstStatus(cat string) *model.Status {
 func (s *Store) putPage(p fixtures.Page) {
 	id := p.ID
 	if id == "" {
-		s.seqPage++
-		id = strconv.Itoa(20000 + s.seqPage)
+		id = strconv.Itoa(20000 + s.nextSeqLocked("page"))
 	}
 	typ := p.Type
 	if typ == "" {
@@ -981,8 +966,7 @@ func (s *Store) putPage(p fixtures.Page) {
 	for _, c := range p.Comments {
 		cid := c.ID
 		if cid == "" {
-			s.seqComment++
-			cid = strconv.Itoa(30000 + s.seqComment)
+			cid = strconv.Itoa(30000 + s.nextSeqLocked("comment"))
 		}
 		cwhen := first(c.When, when)
 		parent := id
@@ -1951,8 +1935,7 @@ func (s *Store) CreatePage(in PageWrite) (*model.Page, error) {
 	if err != nil {
 		return nil, err
 	}
-	s.seqPage++
-	id := strconv.Itoa(20000 + s.seqPage)
+	id := strconv.Itoa(20000 + s.nextSeqLocked("page"))
 	when := formatConfluenceWhen(s.clk, "")
 	author := in.AuthorID
 	if author == "" {
@@ -2478,10 +2461,9 @@ func (s *Store) addCommentLocked(iss *model.Issue, authorID string, body []byte,
 	if len(body) == 0 {
 		body = adf.Doc(text)
 	}
-	s.seqComment++
 	now := clock.Format(s.clk.Tick())
 	cm := model.Comment{
-		ID:         strconv.Itoa(90000 + s.seqComment),
+		ID:         strconv.Itoa(90000 + s.nextSeqLocked("comment")),
 		Author:     *s.userOrDefault(authorID),
 		Body:       body,
 		BodyText:   text,
@@ -2508,9 +2490,8 @@ func (s *Store) AddPageComment(pageID, authorID string, body json.RawMessage) (m
 	if err != nil {
 		return model.PageComment{}, err
 	}
-	s.seqComment++
 	cm := model.PageComment{
-		ID: strconv.Itoa(30000 + s.seqComment), Title: "Re: " + pg.Title,
+		ID: strconv.Itoa(30000 + s.nextSeqLocked("comment")), Title: "Re: " + pg.Title,
 		ParentID: pageID, BodyADF: adfBody, BodyText: text, Version: 1,
 		When:     formatConfluenceWhen(s.clk, ""),
 		AuthorID: s.userOrDefault(authorID).AccountID,
@@ -2554,9 +2535,8 @@ func (s *Store) setAssigneeLocked(iss *model.Issue, accountID, authorID string) 
 // appendHistoryLocked writes one changelog group. Created matches
 // iss.Updated, which the caller has already ticked.
 func (s *Store) appendHistoryLocked(iss *model.Issue, authorID string, items []model.HistoryItem) {
-	s.seqHist++
 	iss.Histories = append(iss.Histories, model.History{
-		ID: "h" + strconv.Itoa(s.seqHist), Created: iss.Updated,
+		ID: "h" + strconv.Itoa(s.nextSeqLocked("hist")), Created: iss.Updated,
 		Author: *s.userOrDefault(authorID),
 		Items:  items,
 	})
@@ -3204,12 +3184,12 @@ func (s *Store) CreateIssue(fields map[string]any, reporterID string) (*model.Is
 	if err != nil {
 		return nil, parentFieldError(err, parentCreateKeys)
 	}
-	s.seqIssue++
+	issueID := strconv.Itoa(10000 + s.nextSeqLocked("issue"))
 	n := s.nextKeyNum(project)
 	key := fmt.Sprintf("%s-%d", project, n)
 	now := clock.Format(s.clk.Tick())
 	iss := &model.Issue{
-		ID: strconv.Itoa(10000 + s.seqIssue), Key: key, Summary: summary,
+		ID: issueID, Key: key, Summary: summary,
 		ProjectKey:  project,
 		IssueTypeID: typeID,
 		StatusID:    "10000",
@@ -3292,8 +3272,7 @@ func (s *Store) AddAttachment(key, filename, mime, authorID string, body []byte)
 	if mime == "" {
 		mime = "application/octet-stream"
 	}
-	s.seqAttach++
-	id := strconv.Itoa(70000 + s.seqAttach)
+	id := strconv.Itoa(70000 + s.nextSeqLocked("attach"))
 	s.putAttachBytesLocked(id, body)
 	a := model.Attachment{
 		ID: id, Filename: filename, MimeType: mime, Size: int64(len(body)),

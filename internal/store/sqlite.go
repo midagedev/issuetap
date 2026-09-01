@@ -1105,3 +1105,27 @@ func (s *Store) attachBytesLocked(id string) ([]byte, bool) {
 	}
 	return b, true
 }
+
+// nextSeqLocked mints the next value of a named id counter in the working
+// copy itself (a store_meta "seq:<name>" row), not in process memory: the
+// persist is one working copy shared by every process that opened it, and
+// per-process counters seeded once at Open handed the same id to different
+// issues (gadak GDK-1180). The UPSERT..RETURNING is a single statement,
+// atomic under SQLite's write lock, on-disk and :memory: alike.
+func (s *Store) nextSeqLocked(name string) int {
+	var v int
+	if err := s.db.QueryRow(`INSERT INTO store_meta(k, v) VALUES('seq:'||?1, '1')
+ON CONFLICT(k) DO UPDATE SET v = CAST(CAST(v AS INTEGER)+1 AS TEXT)
+RETURNING CAST(v AS INTEGER)`, name).Scan(&v); err != nil {
+		panic("store sqlite seq: " + err.Error())
+	}
+	return v
+}
+
+// floorSeqLocked raises the named counter to at least v — the Open-time
+// seed from ids already present in the data. It never lowers a value a
+// concurrent process may have advanced further.
+func (s *Store) floorSeqLocked(name string, v int) {
+	s.sqlExec(`INSERT INTO store_meta(k, v) VALUES('seq:'||?1, CAST(?2 AS TEXT))
+ON CONFLICT(k) DO UPDATE SET v = CAST(MAX(CAST(v AS INTEGER), ?2) AS TEXT)`, name, v)
+}

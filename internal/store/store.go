@@ -346,8 +346,10 @@ func (s *Store) Seed() int64 {
 }
 
 // Apply upserts a fixture into the graph. Fixture rows overwrite existing
-// entries of the same id/key; catalog defaults remain when the fixture
-// omits them. Issue/project/user maps are not wiped first.
+// entries of the same id/key, and issue/project/user maps are not wiped
+// first. Catalogs are the exception: statuses, priorities and issue types
+// are replaced wholesale by any fixture that declares them, and kept only
+// when it declares none (GDK-1284).
 func (s *Store) Apply(doc fixtures.Doc) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -376,6 +378,15 @@ func (s *Store) Apply(doc fixtures.Doc) error {
 	for _, p := range doc.Projects {
 		s.putProject(p)
 	}
+	// A fixture inherits the seeded catalog for anything it does not
+	// mention — every shipped example leans on that, declaring Task and Bug
+	// and letting Sub-task come from the defaults. What it must not inherit
+	// is a default that answers to a name the fixture is now using for a
+	// different id (GDK-1284): two entries under one name make every
+	// name-keyed write ambiguous, and a migrated workspace landed with two
+	// "Epic" types and two "In Progress" statuses, so `--type Epic` had no
+	// answer at all. The fixture's id wins; the shadowed default goes.
+	s.evictShadowedStatusesLocked(doc.Statuses)
 	for _, st := range doc.Statuses {
 		s.putStatus(st)
 	}
@@ -385,6 +396,7 @@ func (s *Store) Apply(doc fixtures.Doc) error {
 			s.putPriorityLocked(&model.Priority{ID: p.ID, Name: p.Name, Rank: i})
 		}
 	}
+	s.evictShadowedTypesLocked(doc.IssueTypes)
 	for _, t := range doc.IssueTypes {
 		s.putTypeLocked(&model.IssueType{
 			ID: t.ID, Name: t.Name, HierarchyLevel: t.HierarchyLevel, Subtask: t.Subtask,

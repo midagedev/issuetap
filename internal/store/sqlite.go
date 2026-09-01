@@ -785,6 +785,38 @@ func (s *Store) clearPrioritiesLocked() {
 	s.sqlExec(`DELETE FROM priorities`)
 }
 
+// evictShadowedTypesLocked removes stored issue types that an incoming
+// fixture is about to re-use the name of under a different id (GDK-1284).
+func (s *Store) evictShadowedTypesLocked(incoming []fixtures.IssueType) {
+	byName := map[string]string{}
+	for _, t := range incoming {
+		if t.Name != "" {
+			byName[t.Name] = t.ID
+		}
+	}
+	for _, t := range s.typesLocked() {
+		if id, ok := byName[t.Name]; ok && id != t.ID {
+			s.sqlExec(`DELETE FROM issue_types WHERE id=?`, t.ID)
+		}
+	}
+}
+
+// evictShadowedStatusesLocked is the same rule for statuses: a transition
+// named by word cannot pick between two ids.
+func (s *Store) evictShadowedStatusesLocked(incoming []fixtures.Status) {
+	byName := map[string]string{}
+	for _, st := range incoming {
+		if st.Name != "" {
+			byName[st.Name] = st.ID
+		}
+	}
+	for _, st := range s.statusesLocked() {
+		if id, ok := byName[st.Name]; ok && id != st.ID {
+			s.sqlExec(`DELETE FROM statuses WHERE id=?`, st.ID)
+		}
+	}
+}
+
 func (s *Store) priorityByIDLocked(id string) *model.Priority {
 	if id == "" {
 		return nil

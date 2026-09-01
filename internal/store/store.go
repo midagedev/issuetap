@@ -433,7 +433,7 @@ func (s *Store) Apply(doc fixtures.Doc) error {
 // a persistence file.
 func (s *Store) seedSeqsLocked() {
 	s.seedIssueSeqLocked()
-	maxC, maxA, maxH := 0, 0, 0
+	maxC, maxA, maxH, maxR := 0, 0, 0, 0
 	bumpComment := func(id string) {
 		n, err := strconv.Atoi(id)
 		if err != nil {
@@ -463,6 +463,11 @@ func (s *Store) seedSeqsLocked() {
 				maxH = n
 			}
 		}
+		for _, rl := range iss.RemoteLinks {
+			if n, err := strconv.Atoi(rl.ID); err == nil && n > 60000 && n < 70000 && n-60000 > maxR {
+				maxR = n - 60000
+			}
+		}
 	}
 	for _, pid := range s.pageCommentParentIDsLocked() {
 		for _, c := range s.pageCommentsLocked(pid) {
@@ -472,6 +477,7 @@ func (s *Store) seedSeqsLocked() {
 	s.floorSeqLocked("comment", maxC)
 	s.floorSeqLocked("attach", maxA)
 	s.floorSeqLocked("hist", maxH)
+	s.floorSeqLocked("remotelink", maxR)
 	// Runtime space ids: 40000+seq. Old persists carry no "seq:space" row,
 	// so a restart used to re-mint from zero into the occupied band.
 	maxS := 0
@@ -763,6 +769,16 @@ func (s *Store) putIssue(in fixtures.Issue) error {
 	}
 	for _, l := range in.Links {
 		iss.Links = append(iss.Links, model.IssueLink{TypeName: l.Type, InwardKey: l.Inward, OutwardKey: l.Outward})
+	}
+	for _, rl := range in.RemoteLinks {
+		id := rl.ID
+		if id == "" {
+			id = strconv.Itoa(60000 + s.nextSeqLocked("remotelink"))
+		}
+		iss.RemoteLinks = append(iss.RemoteLinks, model.RemoteLink{
+			ID: id, GlobalID: rl.GlobalID, Relationship: rl.Relationship,
+			URL: rl.URL, Title: first(rl.Title, rl.URL), Summary: rl.Summary,
+		})
 	}
 	if len(in.History) == 0 {
 		iss.Histories = s.synthesizeHistory(iss)
@@ -1523,6 +1539,77 @@ func (s *Store) DeleteIssueLink(typeID, outwardKey, inwardKey string) error {
 	inward.Updated = now
 	s.putIssueLocked(outward)
 	s.putIssueLocked(inward)
+	return s.markDirtyLocked()
+}
+
+// RemoteLinks lists key's remote issue links (gadak GDK-1032).
+func (s *Store) RemoteLinks(key string) ([]model.RemoteLink, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	iss := s.issueByKeyLocked(key)
+	if iss == nil {
+		return nil, errNotFound("issue", key)
+	}
+	return append([]model.RemoteLink{}, iss.RemoteLinks...), nil
+}
+
+// UpsertRemoteLink creates or updates one remote link on key. A non-empty
+// GlobalID is the upsert identity — Cloud's contract; without one every
+// call creates. Returns the stored row and whether it was created.
+func (s *Store) UpsertRemoteLink(key string, rl model.RemoteLink) (model.RemoteLink, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	iss := s.issueByKeyLocked(key)
+	if iss == nil {
+		return model.RemoteLink{}, false, errNotFound("issue", key)
+	}
+	if strings.TrimSpace(rl.URL) == "" {
+		return model.RemoteLink{}, false, fmt.Errorf("object.url is required")
+	}
+	if rl.Title == "" {
+		rl.Title = rl.URL
+	}
+	if rl.GlobalID != "" {
+		for i := range iss.RemoteLinks {
+			if iss.RemoteLinks[i].GlobalID == rl.GlobalID {
+				rl.ID = iss.RemoteLinks[i].ID
+				iss.RemoteLinks[i] = rl
+				iss.Updated = clock.Format(s.clk.Tick())
+				s.putIssueLocked(iss)
+				return rl, false, s.markDirtyLocked()
+			}
+		}
+	}
+	rl.ID = strconv.Itoa(60000 + s.nextSeqLocked("remotelink"))
+	iss.RemoteLinks = append(iss.RemoteLinks, rl)
+	iss.Updated = clock.Format(s.clk.Tick())
+	s.putIssueLocked(iss)
+	return rl, true, s.markDirtyLocked()
+}
+
+// DeleteRemoteLink removes one remote link by its id.
+func (s *Store) DeleteRemoteLink(key, id string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	iss := s.issueByKeyLocked(key)
+	if iss == nil {
+		return errNotFound("issue", key)
+	}
+	kept := iss.RemoteLinks[:0]
+	removed := false
+	for _, rl := range iss.RemoteLinks {
+		if rl.ID == id {
+			removed = true
+			continue
+		}
+		kept = append(kept, rl)
+	}
+	if !removed {
+		return errNotFound("remoteLink", id)
+	}
+	iss.RemoteLinks = kept
+	iss.Updated = clock.Format(s.clk.Tick())
+	s.putIssueLocked(iss)
 	return s.markDirtyLocked()
 }
 
@@ -3694,6 +3781,12 @@ func (s *Store) issueToFix(iss *model.Issue) fixtures.Issue {
 	}
 	for _, l := range iss.Links {
 		out.Links = append(out.Links, fixtures.Link{Type: l.TypeName, Inward: l.InwardKey, Outward: l.OutwardKey})
+	}
+	for _, rl := range iss.RemoteLinks {
+		out.RemoteLinks = append(out.RemoteLinks, fixtures.RemoteLink{
+			ID: rl.ID, GlobalID: rl.GlobalID, Relationship: rl.Relationship,
+			URL: rl.URL, Title: rl.Title, Summary: rl.Summary,
+		})
 	}
 	for _, pr := range iss.DevPRs {
 		fpr := fixtures.DevPR{

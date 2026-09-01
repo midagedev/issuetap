@@ -88,6 +88,19 @@ type Project struct {
 	Simplified bool   `json:"simplified,omitempty"`
 }
 
+// RemoteLink is one Jira remote issue link — a pointer at something that
+// lives outside this tracker (Cloud: /rest/api/{v}/issue/{key}/remotelink).
+// gadak GDK-1032 uses it to point one workspace's issue at another
+// workspace's issue; the URL is the identity the client dereferences.
+type RemoteLink struct {
+	ID           string `json:"id"`
+	GlobalID     string `json:"globalId,omitempty"`
+	Relationship string `json:"relationship,omitempty"`
+	URL          string `json:"url"`
+	Title        string `json:"title"`
+	Summary      string `json:"summary,omitempty"`
+}
+
 // DevPR is one linked pull request on an issue, in the vocabulary Jira's
 // dev-status detail uses (status OPEN | MERGED | DECLINED). Author and
 // Source (Cloud's dev-status vocabulary) plus Actor (an issuetap extension)
@@ -320,9 +333,12 @@ type Issue struct {
 	DevPRs         []DevPR
 	DevDeployments []DevDeployment
 	DevBuilds      []DevBuild
-	Links          []IssueLink
-	Histories      []History
-	Custom         map[string]any
+	// RemoteLinks are Jira remote issue links (gadak GDK-1032): pointers
+	// at things outside this tracker, upserted by globalId.
+	RemoteLinks []RemoteLink
+	Links       []IssueLink
+	Histories   []History
+	Custom      map[string]any
 }
 
 // Space is a Confluence space.

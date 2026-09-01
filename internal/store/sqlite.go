@@ -319,6 +319,7 @@ type storedIssue struct {
 	DevPRs          []model.DevPR         `json:"devPrs"`
 	DevDeployments  []model.DevDeployment `json:"devDeployments"`
 	DevBuilds       []model.DevBuild      `json:"devBuilds"`
+	RemoteLinks     []model.RemoteLink    `json:"remoteLinks,omitempty"`
 	Links           []storedLink          `json:"links"`
 	Histories       []model.History       `json:"histories"`
 	Custom          map[string]any        `json:"custom"`
@@ -422,7 +423,8 @@ func encodeIssue(iss *model.Issue) []byte {
 		Created: iss.Created, Updated: iss.Updated,
 		DevPRs:         iss.DevPRs,
 		DevDeployments: iss.DevDeployments, DevBuilds: iss.DevBuilds,
-		Histories: iss.Histories, Custom: iss.Custom,
+		RemoteLinks: iss.RemoteLinks,
+		Histories:   iss.Histories, Custom: iss.Custom,
 	}
 	for _, c := range iss.Comments {
 		st.Comments = append(st.Comments, storedComment{
@@ -456,7 +458,8 @@ func decodeIssue(b []byte) model.Issue {
 		Created: st.Created, Updated: st.Updated,
 		DevPRs:         st.DevPRs,
 		DevDeployments: st.DevDeployments, DevBuilds: st.DevBuilds,
-		Histories: st.Histories, Custom: st.Custom,
+		RemoteLinks: st.RemoteLinks,
+		Histories:   st.Histories, Custom: st.Custom,
 	}
 	for _, c := range st.Comments {
 		iss.Comments = append(iss.Comments, model.Comment{

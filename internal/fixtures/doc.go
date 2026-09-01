@@ -147,6 +147,7 @@ type Issue struct {
 	Comments    []Comment      `json:"comments,omitempty" yaml:"comments,omitempty"`
 	Attachments []Attachment   `json:"attachments,omitempty" yaml:"attachments,omitempty"`
 	Links       []Link         `json:"links,omitempty" yaml:"links,omitempty"`
+	RemoteLinks []RemoteLink   `json:"remoteLinks,omitempty" yaml:"remoteLinks,omitempty"`
 	History     []History      `json:"history,omitempty" yaml:"history,omitempty"`
 	Custom      map[string]any `json:"custom,omitempty" yaml:"custom,omitempty"`
 	// DevPRs are development-panel pull-request links (gadak GDK-497).
@@ -234,6 +235,17 @@ type Link struct {
 	Type    string `json:"type" yaml:"type"`
 	Inward  string `json:"inward,omitempty" yaml:"inward,omitempty"`
 	Outward string `json:"outward,omitempty" yaml:"outward,omitempty"`
+}
+
+// RemoteLink is one Jira remote issue link (gadak GDK-1032): a pointer at
+// something outside this tracker, upserted by globalId.
+type RemoteLink struct {
+	ID           string `json:"id,omitempty" yaml:"id,omitempty"`
+	GlobalID     string `json:"globalId,omitempty" yaml:"globalId,omitempty"`
+	Relationship string `json:"relationship,omitempty" yaml:"relationship,omitempty"`
+	URL          string `json:"url" yaml:"url"`
+	Title        string `json:"title,omitempty" yaml:"title,omitempty"`
+	Summary      string `json:"summary,omitempty" yaml:"summary,omitempty"`
 }
 
 type History struct {

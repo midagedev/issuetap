@@ -688,9 +688,103 @@ func (s *Server) handleIssue(w http.ResponseWriter, r *http.Request, rest string
 		s.getEditMeta(w, r, key)
 	case extra == "attachments" && r.Method == http.MethodPost:
 		s.postAttachment(w, r, key)
+	case extra == "remotelink" && r.Method == http.MethodGet:
+		s.getRemoteLinks(w, r, key)
+	case extra == "remotelink" && r.Method == http.MethodPost:
+		s.postRemoteLink(w, r, key)
+	case strings.HasPrefix(extra, "remotelink/") && r.Method == http.MethodDelete:
+		s.deleteRemoteLink(w, r, key, strings.TrimPrefix(extra, "remotelink/"))
 	default:
 		writeUnsupported(w, r.Method, r.URL.Path)
 	}
+}
+
+/* ── Remote issue links (gadak GDK-1032) ──
+ * Cloud's /rest/api/{v}/issue/{key}/remotelink, trimmed to the object
+ * fields a pointer needs (url, title, summary). globalId is the upsert
+ * identity, exactly as Cloud documents it. */
+
+func remoteLinkJSON(rl model.RemoteLink) map[string]any {
+	out := map[string]any{
+		"id": remoteLinkID(rl.ID),
+		"object": map[string]any{
+			"url":   rl.URL,
+			"title": rl.Title,
+		},
+	}
+	if rl.Summary != "" {
+		out["object"].(map[string]any)["summary"] = rl.Summary
+	}
+	if rl.GlobalID != "" {
+		out["globalId"] = rl.GlobalID
+	}
+	if rl.Relationship != "" {
+		out["relationship"] = rl.Relationship
+	}
+	return out
+}
+
+// remoteLinkID serves the id the way Cloud does — a number — for the ids
+// this store mints; a fixture-authored non-numeric id stays a string.
+func remoteLinkID(id string) any {
+	if n, err := strconv.Atoi(id); err == nil {
+		return n
+	}
+	return id
+}
+
+func (s *Server) getRemoteLinks(w http.ResponseWriter, r *http.Request, key string) {
+	links, err := s.st.RemoteLinks(key)
+	if err != nil {
+		writeJiraError(w, http.StatusNotFound, "Issue does not exist or you do not have permission to see it.")
+		return
+	}
+	out := make([]map[string]any, 0, len(links))
+	for _, rl := range links {
+		out = append(out, remoteLinkJSON(rl))
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+func (s *Server) postRemoteLink(w http.ResponseWriter, r *http.Request, key string) {
+	var in struct {
+		GlobalID     string `json:"globalId"`
+		Relationship string `json:"relationship"`
+		Object       struct {
+			URL     string `json:"url"`
+			Title   string `json:"title"`
+			Summary string `json:"summary"`
+		} `json:"object"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		writeJiraError(w, http.StatusBadRequest, "invalid body")
+		return
+	}
+	rl, created, err := s.st.UpsertRemoteLink(key, model.RemoteLink{
+		GlobalID: in.GlobalID, Relationship: in.Relationship,
+		URL: in.Object.URL, Title: in.Object.Title, Summary: in.Object.Summary,
+	})
+	if err != nil {
+		if store.IsNotFound(err) {
+			writeJiraError(w, http.StatusNotFound, "Issue does not exist or you do not have permission to see it.")
+		} else {
+			writeJiraError(w, http.StatusBadRequest, err.Error())
+		}
+		return
+	}
+	status := http.StatusOK
+	if created {
+		status = http.StatusCreated
+	}
+	writeJSON(w, status, map[string]any{"id": remoteLinkID(rl.ID), "self": r.URL.Path + "/" + rl.ID})
+}
+
+func (s *Server) deleteRemoteLink(w http.ResponseWriter, r *http.Request, key, id string) {
+	if err := s.st.DeleteRemoteLink(key, strings.TrimSpace(id)); err != nil {
+		writeJiraError(w, http.StatusNotFound, "No remote issue link exists with the given id.")
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (s *Server) getIssue(w http.ResponseWriter, r *http.Request, key string) {

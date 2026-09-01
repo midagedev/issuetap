@@ -17,7 +17,7 @@ secretscan:
 	bash scripts/secretscan.sh
 
 test-gadak:
-	ISSUETAP_REQUIRE_GADAK=1 ISSUETAP_GADAK_SRC=/Users/hckim/repo/gadak \
+	ISSUETAP_REQUIRE_GADAK=1 ISSUETAP_GADAK_SRC=$(HOME)/repo-mid/gadak \
 		go test ./internal/conformance -count=1 -timeout 180s
 
 scenario:

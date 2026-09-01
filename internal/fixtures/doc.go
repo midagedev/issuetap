@@ -308,12 +308,15 @@ func Load(path string) (Doc, error) {
 
 // Parse decodes a fixture. ext selects YAML vs JSON; empty ext sniffs.
 func Parse(b []byte, ext string) (Doc, error) {
-	b = bytes.TrimSpace(b)
+	// Trim a copy for sniffing only: trimming the parsed bytes would drop
+	// the trailing newlines a keep-chomped (|+) block scalar stores at the
+	// end of the file, silently rewriting that value.
+	sniff := bytes.TrimSpace(b)
 	var d Doc
-	useJSON := strings.EqualFold(ext, ".json") || (ext == "" && len(b) > 0 && b[0] == '{')
+	useJSON := strings.EqualFold(ext, ".json") || (ext == "" && len(sniff) > 0 && sniff[0] == '{')
 	var err error
 	if useJSON {
-		err = json.Unmarshal(b, &d)
+		err = json.Unmarshal(sniff, &d)
 	} else {
 		err = yaml.Unmarshal(b, &d)
 	}
@@ -360,9 +363,22 @@ func validate(d Doc) error {
 	return nil
 }
 
-// MarshalYAML is the snapshot form.
+// MarshalYAML is the snapshot form. yaml.v3's emitter cannot round-trip
+// every real-world string — a value that starts with newlines, nested at
+// history-item depth, emits a block scalar whose indentation indicator its
+// own parser rejects (gadak GDK-1269; "did not find expected key") — so the
+// output is proven by parsing it back before it leaves. A document the
+// emitter breaks ships as indented JSON instead: less pretty, but JSON is
+// valid YAML, so Load/Parse read it unchanged.
 func MarshalYAML(d Doc) ([]byte, error) {
-	return yaml.Marshal(d)
+	b, err := yaml.Marshal(d)
+	if err == nil {
+		var probe Doc
+		if yaml.Unmarshal(b, &probe) == nil {
+			return b, nil
+		}
+	}
+	return MarshalJSON(d)
 }
 
 // MarshalJSON is the snapshot form.

@@ -702,9 +702,10 @@ func (s *Store) putIssue(in fixtures.Issue) error {
 	if updated == "" {
 		updated = created
 	}
+	descADF, descText := fixtureBody(in.Description, in.DescriptionADF)
 	iss := &model.Issue{
 		ID: id, Key: in.Key, Summary: in.Summary,
-		DescriptionText: in.Description, DescriptionADF: adf.Doc(in.Description),
+		DescriptionText: descText, DescriptionADF: descADF,
 		EnvironmentText: in.Environment, EnvironmentADF: adf.Doc(in.Environment),
 		IssueTypeID:  s.resolveType(in.Type),
 		StatusID:     s.resolveStatus(in.Status),
@@ -811,8 +812,9 @@ func (s *Store) makeComment(c fixtures.Comment, fallback string) model.Comment {
 	created := first(c.Created, fallback)
 	updated := first(c.Updated, created)
 	author := s.userOrDefault(c.Author)
+	bodyADF, bodyText := fixtureBody(c.Body, c.BodyADF)
 	cm := model.Comment{
-		ID: id, Author: *author, Body: adf.Doc(c.Body), BodyText: c.Body,
+		ID: id, Author: *author, Body: bodyADF, BodyText: bodyText,
 		Created: created, Updated: updated,
 	}
 	if c.Visibility != nil && (c.Visibility.Type != "" || c.Visibility.Value != "") {
@@ -948,10 +950,11 @@ func (s *Store) putPage(p fixtures.Page) {
 		ancestors = []string{p.Parent}
 	}
 	authorID := s.resolveUser(p.Author)
+	bodyADF, bodyText := fixtureBody(p.Body, p.BodyADF)
 	pg := &model.Page{
 		ID: id, Type: typ, Status: st, Title: p.Title, SpaceKey: p.Space,
 		Version: ver, When: when, AuthorID: authorID,
-		BodyADF: adf.Doc(p.Body), BodyText: p.Body, BodyStorage: adf.StorageXHTML(p.Body),
+		BodyADF: bodyADF, BodyText: bodyText, BodyStorage: adf.StorageXHTML(bodyText),
 		Labels: append([]string{}, p.Labels...), Ancestors: ancestors,
 		WebUI: fmt.Sprintf("/spaces/%s/pages/%s", p.Space, id),
 	}
@@ -1001,9 +1004,10 @@ func (s *Store) putPage(p fixtures.Page) {
 		if c.ReplyTo != "" {
 			parent = c.ReplyTo
 		}
+		cADF, cText := fixtureBody(c.Body, c.BodyADF)
 		s.appendPageCommentLocked(parent, model.PageComment{
 			ID: cid, Title: "Re: " + p.Title, ParentID: parent,
-			BodyADF: adf.Doc(c.Body), BodyText: c.Body, Version: 1, When: cwhen,
+			BodyADF: cADF, BodyText: cText, Version: 1, When: cwhen,
 			AuthorID: s.resolveUser(c.Author),
 		})
 	}
@@ -3261,6 +3265,35 @@ func jsonMarshal(v any) ([]byte, error) {
 	return json.Marshal(v)
 }
 
+// fixtureBody resolves a fixture body from its two slots. The ADF slot wins
+// when it parses as a document — a migration from another tracker carrying
+// the origin's formatting (gadak GDK-1382), or a Snapshot of a body a person
+// formatted here; the text beside it is derived when the fixture left it
+// empty so search and the DC dialect still see words. Otherwise the plain
+// text is wrapped by adf.Doc as fixtures always were.
+func fixtureBody(text, adfRaw string) (json.RawMessage, string) {
+	if strings.TrimSpace(adfRaw) != "" {
+		if doc, plain, err := parseADF(json.RawMessage(adfRaw)); err == nil {
+			if text == "" {
+				text = plain
+			}
+			return doc, text
+		}
+	}
+	return adf.Doc(text), text
+}
+
+// fixtureADF is the export half of fixtureBody: the ADF slot Snapshot writes.
+// Empty when the document is exactly what adf.Doc(text) rebuilds, so a plain
+// body stays a plain body in the snapshot and only formatting the text
+// cannot hold is written — which is what fixtureBody then prefers on load.
+func fixtureADF(doc json.RawMessage, text string) string {
+	if len(doc) == 0 || string(doc) == string(adf.Doc(text)) {
+		return ""
+	}
+	return string(doc)
+}
+
 // CreateIssue files a new issue. fields is the Jira fields object;
 // reporterID is the acting user used when fields omits reporter (gadak
 // GDK-588 — an explicit fields.reporter always wins).
@@ -3722,6 +3755,7 @@ func (s *Store) snapshotLocked() fixtures.Doc {
 		fp := fixtures.Page{
 			ID: p.ID, Type: p.Type, Status: p.Status, Title: p.Title, Space: p.SpaceKey,
 			Version: p.Version, When: p.When, Author: p.AuthorID, Body: p.BodyText, Labels: p.Labels,
+			BodyADF: fixtureADF(p.BodyADF, p.BodyText),
 		}
 		if n := len(p.Ancestors); n > 0 {
 			fp.Parent = p.Ancestors[n-1]
@@ -3734,7 +3768,8 @@ func (s *Store) snapshotLocked() fixtures.Doc {
 		}
 		for _, cm := range s.pageCommentsLocked(p.ID) {
 			fp.Comments = append(fp.Comments, fixtures.PageComment{
-				ID: cm.ID, Author: cm.AuthorID, Body: cm.BodyText, When: cm.When,
+				ID: cm.ID, Author: cm.AuthorID, Body: cm.BodyText, BodyADF: fixtureADF(cm.BodyADF, cm.BodyText),
+				When: cm.When,
 			})
 		}
 		d.Pages = append(d.Pages, fp)
@@ -3748,8 +3783,9 @@ func (s *Store) snapshotLocked() fixtures.Doc {
 func (s *Store) issueToFix(iss *model.Issue) fixtures.Issue {
 	out := fixtures.Issue{
 		ID: iss.ID, Key: iss.Key, Summary: iss.Summary,
-		Description: iss.DescriptionText, Environment: iss.EnvironmentText,
-		Type: iss.IssueTypeID, Status: iss.StatusID, Priority: iss.PriorityID,
+		Description: iss.DescriptionText, DescriptionADF: fixtureADF(iss.DescriptionADF, iss.DescriptionText),
+		Environment: iss.EnvironmentText,
+		Type:        iss.IssueTypeID, Status: iss.StatusID, Priority: iss.PriorityID,
 		Assignee: iss.AssigneeID, Reporter: iss.ReporterID, Creator: iss.CreatorID,
 		Project: iss.ProjectKey, Parent: iss.ParentKey, Labels: iss.Labels,
 		Duedate: iss.Duedate, Resolution: iss.ResolutionID,
@@ -3766,7 +3802,8 @@ func (s *Store) issueToFix(iss *model.Issue) fixtures.Issue {
 	}
 	for _, c := range iss.Comments {
 		fc := fixtures.Comment{
-			ID: c.ID, Author: c.Author.AccountID, Body: c.BodyText, Created: c.Created, Updated: c.Updated,
+			ID: c.ID, Author: c.Author.AccountID, Body: c.BodyText, BodyADF: fixtureADF(c.Body, c.BodyText),
+			Created: c.Created, Updated: c.Updated,
 		}
 		if c.Visibility != nil {
 			fc.Visibility = &fixtures.CommentVisibility{Type: c.Visibility.Type, Value: c.Visibility.Value}

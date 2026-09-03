@@ -123,33 +123,39 @@ type TransitionScreenField struct {
 }
 
 type Issue struct {
-	ID          string         `json:"id,omitempty" yaml:"id,omitempty"`
-	Key         string         `json:"key" yaml:"key"`
-	Summary     string         `json:"summary" yaml:"summary"`
-	Description string         `json:"description,omitempty" yaml:"description,omitempty"`
-	Environment string         `json:"environment,omitempty" yaml:"environment,omitempty"`
-	Type        string         `json:"type,omitempty" yaml:"type,omitempty"`     // id or name
-	Status      string         `json:"status,omitempty" yaml:"status,omitempty"` // id or name
-	Priority    string         `json:"priority,omitempty" yaml:"priority,omitempty"`
-	Assignee    string         `json:"assignee,omitempty" yaml:"assignee,omitempty"`
-	Reporter    string         `json:"reporter,omitempty" yaml:"reporter,omitempty"`
-	Creator     string         `json:"creator,omitempty" yaml:"creator,omitempty"`
-	Project     string         `json:"project,omitempty" yaml:"project,omitempty"`
-	Parent      string         `json:"parent,omitempty" yaml:"parent,omitempty"`
-	Labels      []string       `json:"labels,omitempty" yaml:"labels,omitempty"`
-	Components  []string       `json:"components,omitempty" yaml:"components,omitempty"`
-	FixVersions []string       `json:"fixVersions,omitempty" yaml:"fixVersions,omitempty"`
-	Versions    []string       `json:"versions,omitempty" yaml:"versions,omitempty"`
-	Duedate     string         `json:"duedate,omitempty" yaml:"duedate,omitempty"`
-	Resolution  string         `json:"resolution,omitempty" yaml:"resolution,omitempty"`
-	Created     string         `json:"created,omitempty" yaml:"created,omitempty"`
-	Updated     string         `json:"updated,omitempty" yaml:"updated,omitempty"`
-	Comments    []Comment      `json:"comments,omitempty" yaml:"comments,omitempty"`
-	Attachments []Attachment   `json:"attachments,omitempty" yaml:"attachments,omitempty"`
-	Links       []Link         `json:"links,omitempty" yaml:"links,omitempty"`
-	RemoteLinks []RemoteLink   `json:"remoteLinks,omitempty" yaml:"remoteLinks,omitempty"`
-	History     []History      `json:"history,omitempty" yaml:"history,omitempty"`
-	Custom      map[string]any `json:"custom,omitempty" yaml:"custom,omitempty"`
+	ID          string `json:"id,omitempty" yaml:"id,omitempty"`
+	Key         string `json:"key" yaml:"key"`
+	Summary     string `json:"summary" yaml:"summary"`
+	Description string `json:"description,omitempty" yaml:"description,omitempty"`
+	// DescriptionADF is the body as an ADF document (JSON text), for a
+	// fixture that carries formatting the plain description cannot hold — a
+	// migration from another tracker, or a Snapshot of a rich body. When it
+	// parses as a doc it is stored verbatim and Description is derived from
+	// it if empty; otherwise Description is wrapped by adf.Doc as before.
+	DescriptionADF string         `json:"descriptionAdf,omitempty" yaml:"descriptionAdf,omitempty"`
+	Environment    string         `json:"environment,omitempty" yaml:"environment,omitempty"`
+	Type           string         `json:"type,omitempty" yaml:"type,omitempty"`     // id or name
+	Status         string         `json:"status,omitempty" yaml:"status,omitempty"` // id or name
+	Priority       string         `json:"priority,omitempty" yaml:"priority,omitempty"`
+	Assignee       string         `json:"assignee,omitempty" yaml:"assignee,omitempty"`
+	Reporter       string         `json:"reporter,omitempty" yaml:"reporter,omitempty"`
+	Creator        string         `json:"creator,omitempty" yaml:"creator,omitempty"`
+	Project        string         `json:"project,omitempty" yaml:"project,omitempty"`
+	Parent         string         `json:"parent,omitempty" yaml:"parent,omitempty"`
+	Labels         []string       `json:"labels,omitempty" yaml:"labels,omitempty"`
+	Components     []string       `json:"components,omitempty" yaml:"components,omitempty"`
+	FixVersions    []string       `json:"fixVersions,omitempty" yaml:"fixVersions,omitempty"`
+	Versions       []string       `json:"versions,omitempty" yaml:"versions,omitempty"`
+	Duedate        string         `json:"duedate,omitempty" yaml:"duedate,omitempty"`
+	Resolution     string         `json:"resolution,omitempty" yaml:"resolution,omitempty"`
+	Created        string         `json:"created,omitempty" yaml:"created,omitempty"`
+	Updated        string         `json:"updated,omitempty" yaml:"updated,omitempty"`
+	Comments       []Comment      `json:"comments,omitempty" yaml:"comments,omitempty"`
+	Attachments    []Attachment   `json:"attachments,omitempty" yaml:"attachments,omitempty"`
+	Links          []Link         `json:"links,omitempty" yaml:"links,omitempty"`
+	RemoteLinks    []RemoteLink   `json:"remoteLinks,omitempty" yaml:"remoteLinks,omitempty"`
+	History        []History      `json:"history,omitempty" yaml:"history,omitempty"`
+	Custom         map[string]any `json:"custom,omitempty" yaml:"custom,omitempty"`
 	// DevPRs are development-panel pull-request links (gadak GDK-497).
 	DevPRs []DevPR `json:"devPRs,omitempty" yaml:"devPRs,omitempty"`
 	// Deployments and Builds are the panel's other two kinds (gadak
@@ -204,6 +210,7 @@ type Comment struct {
 	ID      string `json:"id,omitempty" yaml:"id,omitempty"`
 	Author  string `json:"author,omitempty" yaml:"author,omitempty"`
 	Body    string `json:"body" yaml:"body"`
+	BodyADF string `json:"bodyAdf,omitempty" yaml:"bodyAdf,omitempty"` // see Issue.DescriptionADF
 	Created string `json:"created,omitempty" yaml:"created,omitempty"`
 	Updated string `json:"updated,omitempty" yaml:"updated,omitempty"`
 	// Visibility is optional. Omitted on existing fixtures (unrestricted).
@@ -282,6 +289,7 @@ type Page struct {
 	When     string        `json:"when,omitempty" yaml:"when,omitempty"`
 	Author   string        `json:"author,omitempty" yaml:"author,omitempty"`
 	Body     string        `json:"body,omitempty" yaml:"body,omitempty"`
+	BodyADF  string        `json:"bodyAdf,omitempty" yaml:"bodyAdf,omitempty"` // see Issue.DescriptionADF
 	Labels   []string      `json:"labels,omitempty" yaml:"labels,omitempty"`
 	Parent   string        `json:"parent,omitempty" yaml:"parent,omitempty"`
 	Comments []PageComment `json:"comments,omitempty" yaml:"comments,omitempty"`
@@ -305,6 +313,7 @@ type PageComment struct {
 	ID      string `json:"id,omitempty" yaml:"id,omitempty"`
 	Author  string `json:"author,omitempty" yaml:"author,omitempty"`
 	Body    string `json:"body" yaml:"body"`
+	BodyADF string `json:"bodyAdf,omitempty" yaml:"bodyAdf,omitempty"` // see Issue.DescriptionADF
 	When    string `json:"when,omitempty" yaml:"when,omitempty"`
 	ReplyTo string `json:"replyTo,omitempty" yaml:"replyTo,omitempty"`
 }

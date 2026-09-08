@@ -675,6 +675,10 @@ func (s *Server) handleIssue(w http.ResponseWriter, r *http.Request, rest string
 		s.getComments(w, r, key)
 	case extra == "comment" && r.Method == http.MethodPost:
 		s.postComment(w, r, key)
+	case strings.HasPrefix(extra, "comment/") && r.Method == http.MethodPut:
+		s.putComment(w, r, key, strings.TrimPrefix(extra, "comment/"))
+	case strings.HasPrefix(extra, "comment/") && r.Method == http.MethodDelete:
+		s.deleteComment(w, r, key, strings.TrimPrefix(extra, "comment/"))
 	case extra == "changelog" && r.Method == http.MethodGet:
 		s.getChangelog(w, r, key)
 	case extra == "transitions" && r.Method == http.MethodGet:
@@ -881,6 +885,43 @@ func (s *Server) postComment(w http.ResponseWriter, r *http.Request, key string)
 		return
 	}
 	writeJSON(w, http.StatusCreated, s.commentJSON(cm))
+}
+
+// putComment is PUT /issue/{key}/comment/{id} — a comment written by mistake
+// can be corrected. Only the body moves; visibility and the JSD flag are set
+// where they were set, on the post (gadak GDK-1647).
+func (s *Server) putComment(w http.ResponseWriter, r *http.Request, key, id string) {
+	var body struct {
+		Body json.RawMessage `json:"body"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeJiraError(w, http.StatusBadRequest, "Invalid request body")
+		return
+	}
+	cm, err := s.st.UpdateComment(key, strings.TrimSpace(id), body.Body)
+	if err != nil {
+		if store.IsNotFound(err) {
+			writeJiraError(w, http.StatusNotFound, "Comment does not exist or you do not have permission to view it.")
+			return
+		}
+		if fe, ok := store.AsFieldError(err); ok {
+			writeJiraFieldErrors(w, fe.Map())
+			return
+		}
+		writeJiraWriteError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, s.commentJSON(cm))
+}
+
+// deleteComment is DELETE /issue/{key}/comment/{id}. 204 and the comment is
+// gone; a caller that wants it back needs its own copy.
+func (s *Server) deleteComment(w http.ResponseWriter, r *http.Request, key, id string) {
+	if err := s.st.DeleteComment(key, strings.TrimSpace(id)); err != nil {
+		writeJiraError(w, http.StatusNotFound, "Comment does not exist or you do not have permission to view it.")
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (s *Server) getChangelog(w http.ResponseWriter, r *http.Request, key string) {

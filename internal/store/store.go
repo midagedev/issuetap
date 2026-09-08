@@ -2561,6 +2561,61 @@ func (s *Store) WriteComment(key, authorID string, in CommentWrite) (model.Comme
 	return cm, s.markDirtyLocked()
 }
 
+// UpdateComment is PUT /issue/{key}/comment/{id}. The body is replaced; the
+// author and Created stay put and Updated moves, which is what Cloud does on
+// an edit. A single-user tracker has no second author to record.
+func (s *Store) UpdateComment(key, id string, body []byte) (model.Comment, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	iss := s.issueByKeyLocked(key)
+	if iss == nil {
+		return model.Comment{}, errNotFound("issue", key)
+	}
+	for i := range iss.Comments {
+		if iss.Comments[i].ID != id {
+			continue
+		}
+		now := clock.Format(s.clk.Tick())
+		doc, text := normalizeCommentBody(body)
+		iss.Comments[i].Body = doc
+		iss.Comments[i].BodyText = text
+		iss.Comments[i].Updated = now
+		iss.Updated = now
+		cm := iss.Comments[i]
+		s.putIssueLocked(iss)
+		return cm, s.markDirtyLocked()
+	}
+	return model.Comment{}, errNotFound("comment", id)
+}
+
+// DeleteComment is DELETE /issue/{key}/comment/{id}, and it is a real
+// deletion: the comment leaves the persist file on the next flush and there
+// is no trash to recover it from. Same shape as DeleteRemoteLink.
+func (s *Store) DeleteComment(key, id string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	iss := s.issueByKeyLocked(key)
+	if iss == nil {
+		return errNotFound("issue", key)
+	}
+	kept := iss.Comments[:0]
+	removed := false
+	for _, cm := range iss.Comments {
+		if cm.ID == id {
+			removed = true
+			continue
+		}
+		kept = append(kept, cm)
+	}
+	if !removed {
+		return errNotFound("comment", id)
+	}
+	iss.Comments = kept
+	iss.Updated = clock.Format(s.clk.Tick())
+	s.putIssueLocked(iss)
+	return s.markDirtyLocked()
+}
+
 func normalizeCommentVisibility(v *model.Visibility) (*model.Visibility, error) {
 	if v == nil {
 		return nil, nil
@@ -2596,7 +2651,11 @@ func jsdPublicFromProperties(props []CommentProperty) *bool {
 	return nil
 }
 
-func (s *Store) addCommentLocked(iss *model.Issue, authorID string, body []byte, vis *model.Visibility, jsd *bool) model.Comment {
+// normalizeCommentBody is the single owner of what a comment body is: a
+// document as given, or typed characters wrapped into one. Posting and
+// editing both go through it, so an edited comment cannot end up in a shape
+// a posted one could never have had (gadak GDK-1647).
+func normalizeCommentBody(body []byte) ([]byte, string) {
 	text := adf.Plain(body)
 	if text == "" && len(body) > 0 && body[0] != '{' {
 		text = string(body)
@@ -2605,6 +2664,11 @@ func (s *Store) addCommentLocked(iss *model.Issue, authorID string, body []byte,
 	if len(body) == 0 {
 		body = adf.Doc(text)
 	}
+	return body, text
+}
+
+func (s *Store) addCommentLocked(iss *model.Issue, authorID string, body []byte, vis *model.Visibility, jsd *bool) model.Comment {
+	body, text := normalizeCommentBody(body)
 	now := clock.Format(s.clk.Tick())
 	cm := model.Comment{
 		ID:         strconv.Itoa(90000 + s.nextSeqLocked("comment")),

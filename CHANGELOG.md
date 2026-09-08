@@ -25,7 +25,14 @@
   Negative removes the cap. Over the cap is a 413, never a truncation.
 - `/file/{uuid}/binary` resolves through an index instead of scanning
   every issue in the store; the ETag is the content hash.
-
+- Comments can be corrected and removed: `PUT /issue/{key}/comment/{id}`
+  replaces the body, `DELETE` removes the comment (204). PUT keeps the id,
+  author, `created`, visibility and `jsdPublic`, and moves `updated`; a
+  plain-string body is stored the way `POST …/comment` stores one, since
+  posting and editing now share one body normalizer. An unknown comment id
+  or issue key is 404 on both. Before this the tracker was add-only, and a
+  comment posted by mistake — most likely by an agent — had no way back
+  (gadak GDK-1647).
 - Public embedding surface: `issuetap.NewEmbedded` (root package) serves
   the full surface in-process with fixture seeding (path or bytes),
   `Snapshot()` export, and `Close`. No internal types in the API.

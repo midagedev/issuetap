@@ -66,7 +66,7 @@ func Inventory() []Route {
 		{Method: "PUT", Path: "/rest/api/{v}/issue/{key}/assignee", Level: Supported, Cloud: true, DC: true},
 		{Method: "POST", Path: "/rest/api/{v}/issue/{key}/transitions", Level: Supported, Notes: "stores fields.resolution by catalog id; undeclared screen fields 400; done without a resolution defaults to 10000", Cloud: true, DC: true},
 		{Method: "POST", Path: "/rest/api/{v}/issue/{key}/claim", Level: Supported, Notes: "issuetap extension (no Atlassian route): atomic assignee + in-progress transition under one lock; claimed by another actor is 409 naming the holder; same actor is idempotent; takeOver overrides; no in-progress destination is 400; claimedAt is read from the changelog", Cloud: true, DC: true},
-		{Method: "POST", Path: "/rest/api/{v}/issue/{key}/attachments", Level: Supported, Notes: "requires X-Atlassian-Token: no-check; over 8 MiB is 413 (the body is buffered whole)", Cloud: true, DC: true},
+		{Method: "POST", Path: "/rest/api/{v}/issue/{key}/attachments", Level: Supported, Notes: "requires X-Atlassian-Token: no-check; over 32 MiB is 413 (the body is buffered whole for a BLOB write)", Cloud: true, DC: true},
 		{Method: "GET", Path: "/rest/api/{v}/issue/{key}/remotelink", Level: Supported, Notes: "object.url/title/summary + globalId/relationship (gadak GDK-1032)", Cloud: true, DC: true},
 		{Method: "POST", Path: "/rest/api/{v}/issue/{key}/remotelink", Level: Supported, Notes: "upsert by globalId — 201 created, 200 updated", Cloud: true, DC: true},
 		{Method: "DELETE", Path: "/rest/api/{v}/issue/{key}/remotelink/{id}", Level: Supported, Cloud: true, DC: true},

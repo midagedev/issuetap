@@ -1071,19 +1071,19 @@ func (s *Server) postAttachment(w http.ResponseWriter, r *http.Request, key stri
 		// Read one byte past the cap so a file at the boundary is told
 		// apart from one over it. io.ReadAll(io.LimitReader(...)) stops at
 		// the limit with no error, so the old pair stored the first
-		// maxAttachmentBytes of a larger file and answered 200 — silent,
+		// MaxAttachmentBytes of a larger file and answered 200 — silent,
 		// unrecoverable truncation, because this store holds the only copy
 		// (gadak GDK-1614: 12,582,912 in, 8,388,608 stored, success
 		// reported). Refuse instead; the cap is a separate question from
 		// how the bytes are stored.
-		b, err := io.ReadAll(io.LimitReader(part, maxAttachmentBytes+1))
+		b, err := io.ReadAll(io.LimitReader(part, MaxAttachmentBytes+1))
 		if err != nil {
 			writeJiraError(w, http.StatusBadRequest, "Unable to read file")
 			return
 		}
-		if int64(len(b)) > maxAttachmentBytes {
+		if int64(len(b)) > MaxAttachmentBytes {
 			writeJiraError(w, http.StatusRequestEntityTooLarge,
-				fmt.Sprintf("Attachment is larger than the %d MiB limit", maxAttachmentBytes>>20))
+				fmt.Sprintf("Attachment is larger than the %d MiB limit", MaxAttachmentBytes>>20))
 			return
 		}
 		a, err := s.st.AddAttachment(key, part.FileName(), part.Header.Get("Content-Type"), s.identity(r).AccountID, b)
@@ -1100,11 +1100,21 @@ func (s *Server) postAttachment(w http.ResponseWriter, r *http.Request, key stri
 	writeJSON(w, http.StatusOK, created)
 }
 
-// maxAttachmentBytes is the largest attachment this origin accepts. The
-// upload is buffered whole (the store keeps bytes as a BLOB), so the cap is
-// a memory bound, not a policy. Over it is a 413 — never a truncation
-// (gadak GDK-1614).
-const maxAttachmentBytes int64 = 8 << 20
+// MaxAttachmentBytes is the largest attachment this origin accepts. The cap
+// is a memory bound, not a policy: the store keeps bytes as a BLOB, and a
+// BLOB has no streaming read — measured on modernc.org/sqlite v1.40.1,
+// reading a 100 MiB blob in 1 MiB `substr()` slices allocates 1.00x what
+// reading it whole does, and takes 63x as long. So every upload is buffered
+// whole on the way in and every download is materialised whole on the way
+// out, once here and once again in gadak's proxy.
+//
+// 32 MiB is what two such copies in two processes can carry without hurting
+// a laptop. Real Jira workspaces hold much larger files (measured: 22% of
+// 19,076 attachments over 8 MiB, the largest 884 MiB), so this ceiling
+// moves when the bytes leave the BLOB — not before.
+//
+// Over the cap is a 413, never a truncation (gadak GDK-1614).
+const MaxAttachmentBytes int64 = 32 << 20
 
 func (s *Server) getAttachment(w http.ResponseWriter, r *http.Request, id string) {
 	id = strings.Trim(id, "/")

@@ -1,6 +1,7 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"io"
@@ -256,8 +257,14 @@ func (s *Server) handleMediaFile(w http.ResponseWriter, r *http.Request) {
 		mime = "application/octet-stream"
 	}
 	w.Header().Set("Content-Type", mime)
-	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write(body)
+	// ServeContent, not Write: it answers Range with 206, sets
+	// Accept-Ranges and Content-Length, and honours If-Range /
+	// If-None-Match. A browser's <video> seeks with Range, so without this
+	// seeking was dead in gadak's app and some formats refused to play at
+	// all (gadak GDK-1616). The bytes behind an id never change, so the
+	// ETag is the id itself and a second view is a 304.
+	w.Header().Set("ETag", `"`+a.ID+`"`)
+	http.ServeContent(w, r, a.Filename, time.Time{}, bytes.NewReader(body))
 }
 
 func (s *Server) serveUI(w http.ResponseWriter, r *http.Request) {

@@ -32,11 +32,11 @@ statuses:
     category: done
 
 priorities:
-  - {id: "1", name: 가장 높음}
+  - {id: "1", name: 최고}
   - {id: "2", name: 높음}
-  - {id: "3", name: 중간}
+  - {id: "3", name: 보통}
   - {id: "4", name: 낮음}
-  - {id: "5", name: 가장 낮음}
+  - {id: "5", name: 최저}
 
 issueTypes:
   - {id: "10003", name: 작업, hierarchyLevel: 0}

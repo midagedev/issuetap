@@ -124,7 +124,7 @@ var catalogs = map[Code]names{
 			"new": "해야 할 일", "indeterminate": "진행 중", "inprogress": "진행 중", "done": "완료",
 		},
 		priority: map[string]string{
-			"1": "가장 높음", "2": "높음", "3": "중간", "4": "낮음", "5": "가장 낮음",
+			"1": "최고", "2": "높음", "3": "보통", "4": "낮음", "5": "최저",
 		},
 		issueType: map[string]string{
 			"10000": "에픽", "10001": "에픽", "10002": "하위 작업", "10003": "작업",

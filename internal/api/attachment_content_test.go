@@ -10,8 +10,13 @@ import (
 	"net/textproto"
 	"testing"
 
+	"path/filepath"
+
 	"github.com/midagedev/issuetap/internal/api"
+	"github.com/midagedev/issuetap/internal/config"
 	"github.com/midagedev/issuetap/internal/dialect"
+	"github.com/midagedev/issuetap/internal/fixtures"
+	"github.com/midagedev/issuetap/internal/store"
 )
 
 // TestAttachmentDownloadServesUploadedBytes pins the 2026-08-17 finding:
@@ -74,10 +79,14 @@ func TestAttachmentDownloadServesUploadedBytes(t *testing.T) {
 // data loss. Refusing is the contract; the cap itself is a separate
 // question from how the bytes are stored.
 func TestOversizeAttachmentIsRefusedNotTruncated(t *testing.T) {
-	ts := testServer(t, "en", dialect.Cloud)
+	// A file-backed server with a small cap: the cap is configuration now
+	// (gadak GDK-1617), so the test states the number it is testing
+	// instead of allocating a gigabyte to reach a constant.
+	const capBytes = 1 << 20
+	ts := testServerCapped(t, capBytes)
 	defer ts.Close()
 
-	payload := bytes.Repeat([]byte{'A'}, int(api.MaxAttachmentBytes)+1)
+	payload := bytes.Repeat([]byte{'A'}, capBytes+1)
 	var buf bytes.Buffer
 	mw := multipart.NewWriter(&buf)
 	fw, _ := mw.CreateFormFile("file", "oversize.bin")
@@ -104,9 +113,31 @@ func TestOversizeAttachmentIsRefusedNotTruncated(t *testing.T) {
 		t.Fatalf("status %d, want 413: %s", res.StatusCode, body)
 	}
 	// The refusal has to say what the limit is, or the person cannot act on it.
-	if !bytes.Contains(body, []byte(fmt.Sprintf("%d MiB", api.MaxAttachmentBytes>>20))) {
+	if !bytes.Contains(body, []byte(fmt.Sprintf("%d MiB", capBytes>>20))) {
 		t.Errorf("the 413 does not name the cap: %s", body)
 	}
+}
+
+// testServerCapped is a file-backed server (attachment bytes on disk, the
+// path every real workspace takes) with an explicit upload cap.
+func testServerCapped(t *testing.T, max int64) *httptest.Server {
+	t.Helper()
+	doc, err := fixtures.Load(fixtures.Example("tiny.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	st, err := store.Open(store.Options{Seed: 1, Locale: "en", PersistPath: filepath.Join(dir, "issuetap.db")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Apply(doc); err != nil {
+		t.Fatal(err)
+	}
+	cfg := config.Default()
+	cfg.Dialect.Kind = dialect.Cloud
+	cfg.MaxAttachmentBytes = max
+	return httptest.NewServer(api.New(cfg, st, nil, nil, false).Handler())
 }
 
 // TestAttachmentContentSupportsRangeAndETag pins gadak GDK-1616. The media

@@ -105,6 +105,7 @@ func cmdServe(args []string) error {
 	scenario := fs.String("scenario", "", "scenario file to apply on start")
 	persist := fs.String("persist", cfg.Snapshot, "on-disk SQLite persistence file (ISSUETAP_SNAPSHOT)")
 	persistDebounce := fs.Duration("persist-debounce", 0, "retained; no-op (writes always commit before the HTTP response returns)")
+	maxAttach := fs.Int64("max-attachment-bytes", cfg.MaxAttachmentBytes, "largest accepted upload in bytes; 0 = 1 GiB default, negative = no cap (ISSUETAP_MAX_ATTACHMENT_BYTES)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -115,6 +116,7 @@ func cmdServe(args []string) error {
 	cfg.Seed = *seed
 	cfg.Email = *email
 	cfg.Token = *token
+	cfg.MaxAttachmentBytes = *maxAttach
 
 	localeFromCLI := os.Getenv("ISSUETAP_LOCALE") != ""
 	fs.Visit(func(f *flag.Flag) {

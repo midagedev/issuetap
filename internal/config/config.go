@@ -14,15 +14,39 @@ import (
 
 // Config is serve-time settings.
 type Config struct {
-	Addr        string
-	Fixture     string
-	Locale      locale.Code
-	Dialect     dialect.Config
-	Seed        int64
-	Email       string // accepted Basic user; empty = any
-	Token       string // accepted Basic password / Bearer token; empty = any non-empty
-	Snapshot    string // optional path to persist snapshot on shutdown
-	PublicBase  string
+	Addr       string
+	Fixture    string
+	Locale     locale.Code
+	Dialect    dialect.Config
+	Seed       int64
+	Email      string // accepted Basic user; empty = any
+	Token      string // accepted Basic password / Bearer token; empty = any non-empty
+	Snapshot   string // optional path to persist snapshot on shutdown
+	PublicBase string
+	// MaxAttachmentBytes caps one upload. 0 takes DefaultMaxAttachmentBytes;
+	// a negative value means no cap at all, which only an operator who
+	// knows their disk should choose.
+	MaxAttachmentBytes int64
+}
+
+// DefaultMaxAttachmentBytes is 1 GiB. Bytes stream to disk now, so this is
+// not a memory bound — it is a disk bound, and it still matters: an origin
+// reached over a tailnet has more than one actor behind it, and the cap is
+// what stops one of them filling the machine. Real workspaces hold files
+// this large (measured: 22% of 19,076 attachments over 8 MiB, the largest
+// 884 MiB), so the number has to clear them.
+const DefaultMaxAttachmentBytes int64 = 1 << 30
+
+// AttachmentCap resolves the effective cap: 0 for none, else the bytes.
+func (c Config) AttachmentCap() int64 {
+	switch {
+	case c.MaxAttachmentBytes < 0:
+		return 0
+	case c.MaxAttachmentBytes == 0:
+		return DefaultMaxAttachmentBytes
+	default:
+		return c.MaxAttachmentBytes
+	}
 }
 
 // Default is 127.0.0.1:8080, Cloud, English, seed 1.
@@ -42,6 +66,11 @@ func FromEnv(c Config) Config {
 	}
 	if v := os.Getenv("ISSUETAP_FIXTURE"); v != "" {
 		c.Fixture = v
+	}
+	if v := os.Getenv("ISSUETAP_MAX_ATTACHMENT_BYTES"); v != "" {
+		if n, err := strconv.ParseInt(v, 10, 64); err == nil {
+			c.MaxAttachmentBytes = n
+		}
 	}
 	if v := os.Getenv("ISSUETAP_LOCALE"); v != "" {
 		c.Locale = locale.Parse(v)

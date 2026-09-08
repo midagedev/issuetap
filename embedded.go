@@ -31,17 +31,21 @@ import (
 // (pass it as FixturePath). Locale, when non-empty, wins over a fixture's
 // `locale:` field.
 type EmbeddedConfig struct {
-	Seed            int64         // determinism seed (0 → 1)
-	Locale          string        // "" | en | ko | ja | de
-	Dialect         string        // "" | cloud | dc
-	ContextPath     string        // DC context path, e.g. /jira
-	Email           string        // accepted Basic user ("" = any)
-	Token           string        // accepted secret ("" = any non-empty)
-	FixturePath     string        // YAML/JSON fixture file to seed from
-	FixtureBytes    []byte        // fixture contents when FixturePath is empty
-	PersistPath     string        // on-disk SQLite state file (see store.Options)
-	PersistDebounce time.Duration // retained; no-op (writes commit before return)
-	WallClock       bool          // stamp records with wall time, not the seed clock (see store.Options)
+	Seed         int64  // determinism seed (0 → 1)
+	Locale       string // "" | en | ko | ja | de
+	Dialect      string // "" | cloud | dc
+	ContextPath  string // DC context path, e.g. /jira
+	Email        string // accepted Basic user ("" = any)
+	Token        string // accepted secret ("" = any non-empty)
+	FixturePath  string // YAML/JSON fixture file to seed from
+	FixtureBytes []byte // fixture contents when FixturePath is empty
+	PersistPath  string // on-disk SQLite state file (see store.Options)
+	BlobDir      string // attachment bytes directory ("" → <dir(PersistPath)>/blobs)
+	// MaxAttachmentBytes caps one upload; 0 takes the 1 GiB default,
+	// negative removes the cap. Over the cap is a 413, never a truncation.
+	MaxAttachmentBytes int64
+	PersistDebounce    time.Duration // retained; no-op (writes commit before return)
+	WallClock          bool          // stamp records with wall time, not the seed clock (see store.Options)
 }
 
 // Embedded is issuetap as an in-process dependency: the public embedding
@@ -70,6 +74,8 @@ func NewEmbedded(cfg EmbeddedConfig) (*Embedded, error) {
 		Seed:    seed,
 		Email:   cfg.Email,
 		Token:   cfg.Token,
+
+		MaxAttachmentBytes: cfg.MaxAttachmentBytes,
 	}
 	persistLoaded := false
 	if cfg.PersistPath != "" {
@@ -81,7 +87,7 @@ func NewEmbedded(cfg EmbeddedConfig) (*Embedded, error) {
 	}
 	st, err := store.Open(store.Options{
 		Seed: seed, Locale: loc,
-		PersistPath: cfg.PersistPath, PersistDebounce: cfg.PersistDebounce,
+		PersistPath: cfg.PersistPath, PersistDebounce: cfg.PersistDebounce, BlobDir: cfg.BlobDir,
 		WallClock: cfg.WallClock,
 	})
 	if err != nil {

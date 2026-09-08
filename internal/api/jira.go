@@ -1068,53 +1068,33 @@ func (s *Server) postAttachment(w http.ResponseWriter, r *http.Request, key stri
 		if part.FormName() != "file" {
 			continue
 		}
-		// Read one byte past the cap so a file at the boundary is told
-		// apart from one over it. io.ReadAll(io.LimitReader(...)) stops at
-		// the limit with no error, so the old pair stored the first
-		// MaxAttachmentBytes of a larger file and answered 200 — silent,
-		// unrecoverable truncation, because this store holds the only copy
-		// (gadak GDK-1614: 12,582,912 in, 8,388,608 stored, success
-		// reported). Refuse instead; the cap is a separate question from
-		// how the bytes are stored.
-		b, err := io.ReadAll(io.LimitReader(part, MaxAttachmentBytes+1))
+		// Stream the part straight to the store, which refuses past the
+		// cap rather than storing a prefix. The old pair
+		// io.ReadAll(io.LimitReader(part, cap)) stopped at the limit with
+		// no error, so a larger file was stored truncated and answered
+		// 200 — silent and unrecoverable, because this origin holds the
+		// only copy (gadak GDK-1614: 12,582,912 in, 8,388,608 stored,
+		// success reported). Nothing is buffered whole any more, so the
+		// cap is a disk bound the operator sets, not a memory ceiling
+		// this file gets to pick (gadak GDK-1617).
+		limit := s.cfg.AttachmentCap()
+		a, err := s.st.AddAttachmentStream(key, part.FileName(), part.Header.Get("Content-Type"), s.identity(r).AccountID, part, limit)
 		if err != nil {
-			writeJiraError(w, http.StatusBadRequest, "Unable to read file")
-			return
-		}
-		if int64(len(b)) > MaxAttachmentBytes {
-			writeJiraError(w, http.StatusRequestEntityTooLarge,
-				fmt.Sprintf("Attachment is larger than the %d MiB limit", MaxAttachmentBytes>>20))
-			return
-		}
-		a, err := s.st.AddAttachment(key, part.FileName(), part.Header.Get("Content-Type"), s.identity(r).AccountID, b)
-		if err != nil {
-			if store.IsNotFound(err) {
+			switch {
+			case errors.Is(err, store.ErrAttachmentTooLarge):
+				writeJiraError(w, http.StatusRequestEntityTooLarge,
+					fmt.Sprintf("Attachment is larger than the %d MiB limit", limit>>20))
+			case store.IsNotFound(err):
 				writeJiraError(w, http.StatusNotFound, "Issue does not exist")
-				return
+			default:
+				writeJiraWriteError(w, err)
 			}
-			writeJiraWriteError(w, err)
 			return
 		}
 		created = append(created, s.attachJSON(r, a))
 	}
 	writeJSON(w, http.StatusOK, created)
 }
-
-// MaxAttachmentBytes is the largest attachment this origin accepts. The cap
-// is a memory bound, not a policy: the store keeps bytes as a BLOB, and a
-// BLOB has no streaming read — measured on modernc.org/sqlite v1.40.1,
-// reading a 100 MiB blob in 1 MiB `substr()` slices allocates 1.00x what
-// reading it whole does, and takes 63x as long. So every upload is buffered
-// whole on the way in and every download is materialised whole on the way
-// out, once here and once again in gadak's proxy.
-//
-// 32 MiB is what two such copies in two processes can carry without hurting
-// a laptop. Real Jira workspaces hold much larger files (measured: 22% of
-// 19,076 attachments over 8 MiB, the largest 884 MiB), so this ceiling
-// moves when the bytes leave the BLOB — not before.
-//
-// Over the cap is a 413, never a truncation (gadak GDK-1614).
-const MaxAttachmentBytes int64 = 32 << 20
 
 func (s *Server) getAttachment(w http.ResponseWriter, r *http.Request, id string) {
 	id = strings.Trim(id, "/")

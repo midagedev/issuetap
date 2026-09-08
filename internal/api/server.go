@@ -1,7 +1,6 @@
 package api
 
 import (
-	"bytes"
 	"context"
 	"encoding/base64"
 	"io"
@@ -247,24 +246,26 @@ func (s *Server) handleMediaFile(w http.ResponseWriter, r *http.Request) {
 	// /attachment/content/{id} gets the uploaded file back.
 	rest := strings.TrimPrefix(r.URL.Path, "/file/")
 	media, _, _ := strings.Cut(rest, "/")
-	body, a := s.st.AttachmentByMedia(media)
-	if a == nil {
+	rc, info, ok := s.st.OpenAttachmentByMedia(media)
+	if !ok {
 		http.NotFound(w, r)
 		return
 	}
-	mime := a.MimeType
+	defer rc.Close()
+	mime := info.MimeType
 	if mime == "" {
 		mime = "application/octet-stream"
 	}
 	w.Header().Set("Content-Type", mime)
-	// ServeContent, not Write: it answers Range with 206, sets
-	// Accept-Ranges and Content-Length, and honours If-Range /
-	// If-None-Match. A browser's <video> seeks with Range, so without this
+	// ServeContent over the file itself, not Write over a buffer: it
+	// answers Range with 206, sets Accept-Ranges and Content-Length, and
+	// honours If-Range / If-None-Match, while never holding more than a
+	// copy buffer. A browser's <video> seeks with Range, so without this
 	// seeking was dead in gadak's app and some formats refused to play at
-	// all (gadak GDK-1616). The bytes behind an id never change, so the
-	// ETag is the id itself and a second view is a 304.
-	w.Header().Set("ETag", `"`+a.ID+`"`)
-	http.ServeContent(w, r, a.Filename, time.Time{}, bytes.NewReader(body))
+	// all (gadak GDK-1616). The ETag is the content hash — the bytes are
+	// stored under that name, so it cannot disagree with what is served.
+	w.Header().Set("ETag", `"`+info.SHA256+`"`)
+	http.ServeContent(w, r, info.Filename, time.Time{}, rc)
 }
 
 func (s *Server) serveUI(w http.ResponseWriter, r *http.Request) {

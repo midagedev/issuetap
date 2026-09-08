@@ -9,12 +9,14 @@
 // value (*bool false on Comment.JsdPublic) to nil.
 //
 // persistSchemaVersion is PRAGMA user_version. It is persist bookkeeping,
-// not entity normalization: a mismatch is refused, never migrated in
-// this round. store_meta holds seed/locale/timezone so a restart restores
-// them without a YAML document.
+// not entity normalization. An older stamp is migrated forward (v1 → v2
+// moved attachment bytes out of the BLOB table and into a directory);
+// a newer one is refused. store_meta holds seed/locale/timezone so a
+// restart restores them without a YAML document.
 package store
 
 import (
+	"bytes"
 	"database/sql"
 	"encoding/json"
 	"fmt"
@@ -32,9 +34,9 @@ import (
 )
 
 // persistSchemaVersion is this binary's on-disk schema stamp
-// (PRAGMA user_version). Bump only with a migration; this round refuses
-// any other value.
-const persistSchemaVersion = 1
+// (PRAGMA user_version). A lower version is migrated (see migrate.go); a
+// higher one is refused, because this build cannot know what it holds.
+const persistSchemaVersion = 2
 
 const sqliteMagic = "SQLite format 3\x00"
 
@@ -43,7 +45,27 @@ const sqliteMagic = "SQLite format 3\x00"
 // single connection MaxOpenConns(1) holds open.
 var memSeq atomic.Uint64
 
-const workingSchema = `
+// attachmentBlobsSchema is separate so the v1 → v2 migration creates
+// exactly what a fresh database gets — one owner for the DDL.
+const attachmentBlobsSchema = `
+-- attachment_blobs is the byte-side index: one row per attachment, in
+-- every mode. A file-backed store keeps the bytes in <blobDir> under
+-- sha256 and this table is the only reference to them (the path is
+-- computed, never stored). A :memory: store still writes the row, so the
+-- media lookup is an index hit rather than a scan of every issue.
+CREATE TABLE attachment_blobs (
+  id TEXT PRIMARY KEY,
+  media_id TEXT NOT NULL,
+  filename TEXT NOT NULL DEFAULT '',
+  mime TEXT NOT NULL DEFAULT '',
+  sha256 TEXT NOT NULL,
+  size INTEGER NOT NULL
+);
+CREATE INDEX attachment_blobs_media ON attachment_blobs(media_id);
+CREATE INDEX attachment_blobs_sha ON attachment_blobs(sha256);
+`
+
+const workingSchema = attachmentBlobsSchema + `
 CREATE TABLE users (
   account_id TEXT PRIMARY KEY,
   name TEXT NOT NULL DEFAULT '',
@@ -172,7 +194,8 @@ func persistYAMLError(path string) error {
 }
 
 func persistSchemaError(path string, have, want int) error {
-	return fmt.Errorf("persist %s: schema_version %d (this build reads %d)", path, have, want)
+	return fmt.Errorf("persist %s: schema_version %d (this build reads %d) — this file was written by a newer gadak; upgrade gadak, or restore the pre-upgrade copy %s",
+		path, have, want, backupPath(path, have))
 }
 
 func isSQLiteFile(path string) (bool, error) {
@@ -239,7 +262,7 @@ func createFileDB(path string) (*sql.DB, error) {
 	return db, nil
 }
 
-func openExistingFileDB(path string) (*sql.DB, error) {
+func openExistingFileDB(path, blobDir string) (*sql.DB, error) {
 	db, err := sql.Open("sqlite", persistDSN(path))
 	if err != nil {
 		return nil, fmt.Errorf("persist: open %s: %w", path, err)
@@ -254,7 +277,12 @@ func openExistingFileDB(path string) (*sql.DB, error) {
 		db.Close()
 		return nil, fmt.Errorf("persist: schema_version %s: %w", path, err)
 	}
-	if have != persistSchemaVersion {
+	if have < persistSchemaVersion {
+		if err := migratePersist(db, path, have, blobDir); err != nil {
+			db.Close()
+			return nil, err
+		}
+	} else if have > persistSchemaVersion {
 		db.Close()
 		return nil, persistSchemaError(path, have, persistSchemaVersion)
 	}
@@ -1129,16 +1157,60 @@ func (s *Store) pageCommentCountLocked() int {
 
 // --- attachment bytes ---
 
-func (s *Store) putAttachBytesLocked(id string, body []byte) {
-	if body == nil {
-		body = []byte{}
+// putBlobLocked makes staged bytes reachable. The row lands after the
+// bytes, never before: a row without its file is a broken attachment, a
+// file without its row is an orphan that only costs disk.
+func (s *Store) putBlobLocked(ref blobRef, st staged) {
+	if err := s.blobs.commit(ref, st); err != nil {
+		panic("store blobs commit: " + err.Error())
 	}
-	s.sqlExec(`INSERT OR REPLACE INTO attachments(id, bytes) VALUES(?,?)`, id, body)
+	s.sqlExec(`INSERT OR REPLACE INTO attachment_blobs(id, media_id, filename, mime, sha256, size) VALUES(?,?,?,?,?,?)`,
+		ref.ID, ref.MediaID, ref.Filename, ref.MimeType, ref.SHA, ref.Size)
+}
+
+// stageBytesLocked is the in-hand-bytes path (fixture seed, snapshot
+// restore). The streaming path stages with no lock held; see
+// AddAttachmentStream.
+func (s *Store) stageBytesLocked(body []byte) staged {
+	st, err := s.blobs.stage(bytes.NewReader(body), 0)
+	if err != nil {
+		panic("store blobs stage: " + err.Error())
+	}
+	return st
+}
+
+func (s *Store) blobRefLocked(id string) (blobRef, bool) {
+	return s.scanBlobRow(`SELECT id, media_id, filename, mime, sha256, size FROM attachment_blobs WHERE id=?`, id)
+}
+
+func (s *Store) blobRefByMediaLocked(media string) (blobRef, bool) {
+	return s.scanBlobRow(`SELECT id, media_id, filename, mime, sha256, size FROM attachment_blobs WHERE media_id=?`, media)
+}
+
+func (s *Store) scanBlobRow(q string, args ...any) (blobRef, bool) {
+	var r blobRef
+	err := s.db.QueryRow(q, args...).Scan(&r.ID, &r.MediaID, &r.Filename, &r.MimeType, &r.SHA, &r.Size)
+	if err == sql.ErrNoRows {
+		return blobRef{}, false
+	}
+	if err != nil {
+		panic("store sqlite query: " + err.Error())
+	}
+	return r, true
 }
 
 func (s *Store) attachBytesLocked(id string) ([]byte, bool) {
-	b, ok := s.sqlBlob(`SELECT bytes FROM attachments WHERE id=?`, id)
+	ref, ok := s.blobRefLocked(id)
 	if !ok {
+		return nil, false
+	}
+	rc, err := s.blobs.load(ref)
+	if err != nil {
+		return nil, false
+	}
+	defer rc.Close()
+	b, err := io.ReadAll(rc)
+	if err != nil {
 		return nil, false
 	}
 	return b, true

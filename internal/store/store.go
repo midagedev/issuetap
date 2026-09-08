@@ -6,6 +6,7 @@
 package store
 
 import (
+	"bytes"
 	"crypto/sha1"
 	"database/sql"
 	"encoding/base64"
@@ -13,8 +14,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
+	"path/filepath"
 	"slices"
 	"sort"
 	"strconv"
@@ -49,6 +52,10 @@ type Store struct {
 	// seeded once at Open handed the same id to different issues
 	// (gadak GDK-1180). Clock/locale/seed live in store_meta too.
 	persist *persistState
+
+	// blobs owns attachment bytes: files under BlobDir when this store is
+	// file-backed, the attachments BLOB table when it is :memory:.
+	blobs blobs
 }
 
 // Options seed a store.
@@ -65,6 +72,11 @@ type Options struct {
 	// every mutation commits before the call returns (durable-before-return
 	// is the only mode).
 	PersistDebounce time.Duration
+	// BlobDir holds attachment bytes, one content-addressed file each,
+	// when PersistPath is set. Empty defaults to "blobs" beside the
+	// persist file — never leave a file-backed store on the BLOB path by
+	// omission, or bytes silently keep landing in the database.
+	BlobDir string
 	// WallClock stamps generated records with the machine's wall time
 	// instead of the deterministic seed clock — for a standalone workspace
 	// that is a real tracker, not a fixture-driven demo (gadak GDK-369).
@@ -118,10 +130,15 @@ func openStore(opt Options) (*Store, error) {
 	}
 	if opt.PersistPath == "" {
 		s.db = openWorkingDB()
+		s.blobs = memBlobs{db: s.db}
 		s.installDefaultCatalog()
 		return s, nil
 	}
 	s.persist = &persistState{path: opt.PersistPath}
+	blobDir := opt.BlobDir
+	if blobDir == "" {
+		blobDir = filepath.Join(filepath.Dir(opt.PersistPath), "blobs")
+	}
 	_, statErr := os.Stat(opt.PersistPath)
 	if statErr != nil {
 		if !errors.Is(statErr, fs.ErrNotExist) {
@@ -132,6 +149,9 @@ func openStore(opt Options) (*Store, error) {
 			return nil, err
 		}
 		s.db = db
+		if err := s.openBlobs(blobDir); err != nil {
+			return nil, err
+		}
 		s.installDefaultCatalog()
 		s.writeMetaLocked()
 		return s, nil
@@ -139,15 +159,27 @@ func openStore(opt Options) (*Store, error) {
 	if err := inspectPersistPath(opt.PersistPath); err != nil {
 		return nil, err
 	}
-	db, err := openExistingFileDB(opt.PersistPath)
+	db, err := openExistingFileDB(opt.PersistPath, blobDir)
 	if err != nil {
 		return nil, err
 	}
 	s.db = db
+	if err := s.openBlobs(blobDir); err != nil {
+		return nil, err
+	}
 	s.loadMetaLocked()
 	s.seedSeqsLocked()
 	s.seedClockLocked()
 	return s, nil
+}
+
+func (s *Store) openBlobs(dir string) error {
+	d, err := newDirBlobs(dir)
+	if err != nil {
+		return err
+	}
+	s.blobs = d
+	return nil
 }
 
 // markDirtyLocked records persist bookkeeping after a mutation. SQL
@@ -840,8 +872,9 @@ func (s *Store) makeAttach(a fixtures.Attachment, fallback string) (model.Attach
 	default:
 		body = []byte("issuetap fixture attachment " + a.Filename)
 	}
-	s.putAttachBytesLocked(id, body)
 	media := uuid5(id)
+	s.putBlobLocked(blobRef{ID: id, MediaID: media, Filename: a.Filename, MimeType: mime,
+		SHA: hashOf(body), Size: int64(len(body))}, s.stageBytesLocked(body))
 	return model.Attachment{
 		ID: id, Filename: a.Filename, MimeType: mime, Size: int64(len(body)),
 		Author: *s.userOrDefault(a.Author), Created: first(a.Created, fallback),
@@ -2178,21 +2211,36 @@ func (s *Store) AttachmentBytes(id string) ([]byte, *model.Attachment) {
 	return b, nil
 }
 
-// AttachmentByMedia resolves the media UUID that /attachment/content
-// redirects to, so the download target can serve the stored bytes.
-func (s *Store) AttachmentByMedia(media string) ([]byte, *model.Attachment) {
+// BlobInfo is what serving one attachment needs, and nothing more.
+type BlobInfo struct {
+	ID       string
+	Filename string
+	MimeType string
+	Size     int64
+	SHA256   string // stable content identity; the ETag
+}
+
+// OpenAttachmentByMedia resolves the media UUID that /attachment/content
+// redirects to and returns a seekable reader over the bytes. Seekable, so
+// the caller can answer Range without materialising the file — a browser
+// seeking in a <video> issues one request per scrub.
+//
+// The lock covers the index lookup only. Opening and reading happen
+// outside it; the file is named by its content, so it cannot be rewritten
+// underneath the reader.
+func (s *Store) OpenAttachmentByMedia(media string) (io.ReadSeekCloser, BlobInfo, bool) {
 	s.mu.RLock()
-	defer s.mu.RUnlock()
-	for _, iss := range s.allIssuesLocked() {
-		for i := range iss.Attachments {
-			if iss.Attachments[i].MediaID == media {
-				a := iss.Attachments[i]
-				b, _ := s.attachBytesLocked(a.ID)
-				return b, &a
-			}
-		}
+	ref, ok := s.blobRefByMediaLocked(media)
+	s.mu.RUnlock()
+	if !ok {
+		return nil, BlobInfo{}, false
 	}
-	return nil, nil
+	rc, err := s.blobs.load(ref)
+	if err != nil {
+		return nil, BlobInfo{}, false
+	}
+	return rc, BlobInfo{ID: ref.ID, Filename: ref.Filename, MimeType: ref.MimeType,
+		Size: ref.Size, SHA256: ref.SHA}, true
 }
 
 // Transitions for an issue: every other status in the catalog. This is a
@@ -3366,8 +3414,34 @@ func (s *Store) nextKeyNum(project string) int {
 	return max + 1
 }
 
-// AddAttachment stores bytes on an issue.
+// AddAttachment stores bytes already in hand.
 func (s *Store) AddAttachment(key, filename, mime, authorID string, body []byte) (model.Attachment, error) {
+	return s.AddAttachmentStream(key, filename, mime, authorID, bytes.NewReader(body), 0)
+}
+
+// AddAttachmentStream stores an attachment without ever holding the whole
+// file, refusing past max (0 = no cap) with ErrAttachmentTooLarge.
+//
+// The bytes are staged with NO store lock held. An upload is the one
+// mutation whose duration is set by the network rather than by this
+// process, and a paired origin is a multi-actor tailnet endpoint: holding
+// the write lock for the length of a 884 MiB transfer would stall every
+// other write on the machine behind it. Staging outside the lock is safe
+// because a staged blob is named by its own content — the worst a lost
+// race leaves is a file nobody references.
+func (s *Store) AddAttachmentStream(key, filename, mime, authorID string, r io.Reader, max int64) (model.Attachment, error) {
+	// Check the issue first, so a typo'd key does not cost a full upload.
+	s.mu.RLock()
+	exists := s.issueByKeyLocked(key) != nil
+	s.mu.RUnlock()
+	if !exists {
+		return model.Attachment{}, errNotFound("issue", key)
+	}
+	st, err := s.blobs.stage(r, max)
+	if err != nil {
+		return model.Attachment{}, err
+	}
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	iss := s.issueByKeyLocked(key)
@@ -3378,12 +3452,14 @@ func (s *Store) AddAttachment(key, filename, mime, authorID string, body []byte)
 		mime = "application/octet-stream"
 	}
 	id := strconv.Itoa(70000 + s.nextSeqLocked("attach"))
-	s.putAttachBytesLocked(id, body)
+	media := uuid5(id)
 	a := model.Attachment{
-		ID: id, Filename: filename, MimeType: mime, Size: int64(len(body)),
+		ID: id, Filename: filename, MimeType: mime, Size: st.size,
 		Author: *s.userOrDefault(authorID), Created: clock.Format(s.clk.Tick()),
-		MediaID: uuid5(id),
+		MediaID: media,
 	}
+	s.putBlobLocked(blobRef{ID: id, MediaID: media, Filename: filename, MimeType: mime,
+		SHA: st.sha, Size: st.size}, st)
 	iss.Attachments = append(iss.Attachments, a)
 	iss.Updated = a.Created
 	s.putIssueLocked(iss)

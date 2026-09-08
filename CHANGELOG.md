@@ -2,6 +2,30 @@
 
 ## Unreleased
 
+- Attachment bytes live beside the database, not inside it. A file-backed
+  store writes one content-addressed file per distinct attachment under
+  `<persist-dir>/blobs/<sha[0:2]>/<sha256>`; `attachment_blobs` holds the
+  reference and the path is always computed, so moving a workspace
+  directory still works. Uploads stream to disk and downloads stream from
+  it — nothing is buffered whole, and `/file/{uuid}/binary` answers Range
+  from the file itself, so seeking in a video works. A `:memory:` store
+  keeps the old BLOB path.
+- Persist schema 1 → 2, the first migration this file has had: opening a
+  v1 database moves its attachment bytes out and keeps the pre-migration
+  copy at `<persist>.pre-v2.bak`. It takes that copy with `VACUUM INTO`
+  (the persist is WAL, so copying the `.db` alone loses committed pages),
+  writes the bytes before opening its transaction, and re-reads
+  `user_version` inside `BEGIN IMMEDIATE` so two processes opening the
+  same file migrate it once. A database from a newer build is still
+  refused, now naming that copy.
+- The upload cap is configuration: `--max-attachment-bytes`,
+  `ISSUETAP_MAX_ATTACHMENT_BYTES`, `EmbeddedConfig.MaxAttachmentBytes`.
+  Default 1 GiB (was a hardcoded 32 MiB) — the bytes no longer sit in
+  memory, but an origin reached over a network still has a disk to fill.
+  Negative removes the cap. Over the cap is a 413, never a truncation.
+- `/file/{uuid}/binary` resolves through an index instead of scanning
+  every issue in the store; the ETag is the content hash.
+
 - Public embedding surface: `issuetap.NewEmbedded` (root package) serves
   the full surface in-process with fixture seeding (path or bytes),
   `Snapshot()` export, and `Close`. No internal types in the API.

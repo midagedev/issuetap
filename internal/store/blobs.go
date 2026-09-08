@@ -51,6 +51,10 @@ type blobRef struct {
 	MimeType string
 	SHA      string
 	Size     int64
+	// CreatedAt is when these bytes were stored — the attachment's own
+	// timestamp, so a migrated row keeps the date it always had rather than
+	// the date of the upgrade.
+	CreatedAt string
 }
 
 // staged is bytes that are already durable (dir mode: written and fsynced
@@ -188,8 +192,19 @@ func (d dirBlobs) stage(r io.Reader, max int64) (st staged, err error) {
 	sha := hex.EncodeToString(h.Sum(nil))
 
 	dst := d.path(sha)
-	if err = os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+	bucket := filepath.Dir(dst)
+	_, bucketErr := os.Stat(bucket)
+	if err = os.MkdirAll(bucket, 0o755); err != nil {
 		return staged{}, fmt.Errorf("blobs: %w", err)
+	}
+	if bucketErr != nil {
+		// The bucket is new, so its own entry in the root is not durable
+		// yet. Syncing only the bucket makes the file durable inside a
+		// directory that may not survive — and a row that commits against
+		// a missing directory is a broken attachment, the one state this
+		// design refuses. Only on creation: 1 of 256 uploads, not every
+		// one.
+		syncDir(d.root)
 	}
 	if err = os.Rename(tmp, dst); err != nil {
 		// Defensive: Go's os.Rename replaces an existing target on every
@@ -250,3 +265,47 @@ type nopSeekCloser struct{ *bytes.Reader }
 func (nopSeekCloser) Close() error { return nil }
 
 func newBytesReader(b []byte) *bytes.Reader { return bytes.NewReader(b) }
+
+// AttachmentStorage is what an operator wants to know about attachment
+// bytes without opening a shell on the machine that holds them: how many,
+// how much disk, how far back, and whether any are unaccounted for.
+//
+// It is an aggregate over attachment_blobs, not a directory walk. That
+// matters twice: the answer is one query rather than a stat per file, and
+// it is reachable over the API — a paired workspace's bytes live on the
+// home machine, where the client asking cannot walk anything.
+type AttachmentStorage struct {
+	// Attachments counts rows; Files counts distinct sha256, which is
+	// smaller when the same bytes are attached more than once.
+	Attachments int    `json:"attachments"`
+	Files       int    `json:"files"`
+	Bytes       int64  `json:"bytes"`
+	LargestSize int64  `json:"largestSize"`
+	OldestAt    string `json:"oldestAt,omitempty"`
+	NewestAt    string `json:"newestAt,omitempty"`
+	// Deleted rows are no longer referenced by any issue. There is no
+	// delete verb yet, so this is 0; it exists so that when there is one,
+	// "what can be reclaimed" is a question this struct already answers.
+	Deleted int `json:"deleted"`
+}
+
+// AttachmentStorage reports the byte-side totals. Distinct-sha counting is
+// why Files can be less than Attachments: the store is content-addressed.
+func (s *Store) AttachmentStorage() AttachmentStorage {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	var out AttachmentStorage
+	var oldest, newest sql.NullString
+	var largest, total sql.NullInt64
+	err := s.db.QueryRow(`
+SELECT COUNT(*), COUNT(DISTINCT sha256), SUM(size), MAX(size), MIN(NULLIF(created_at,'')), MAX(created_at)
+FROM attachment_blobs WHERE deleted_at=''`).
+		Scan(&out.Attachments, &out.Files, &total, &largest, &oldest, &newest)
+	if err != nil {
+		return AttachmentStorage{}
+	}
+	out.Bytes, out.LargestSize = total.Int64, largest.Int64
+	out.OldestAt, out.NewestAt = oldest.String, newest.String
+	out.Deleted = s.sqlCount(`SELECT COUNT(*) FROM attachment_blobs WHERE deleted_at<>''`)
+	return out
+}

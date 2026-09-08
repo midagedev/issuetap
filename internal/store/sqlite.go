@@ -59,7 +59,16 @@ CREATE TABLE attachment_blobs (
   filename TEXT NOT NULL DEFAULT '',
   mime TEXT NOT NULL DEFAULT '',
   sha256 TEXT NOT NULL,
-  size INTEGER NOT NULL
+  size INTEGER NOT NULL,
+  -- created_at is when the bytes were stored, deleted_at when a row stopped
+  -- referring to them (empty = live). They are here rather than only inside
+  -- the issue JSON because the questions this table exists to answer are
+  -- aggregate ones — how much disk, since when, what is still referenced —
+  -- and answering those by decoding every issue blob is the shape this
+  -- table replaced. deleted_at has no verb behind it yet; the column is
+  -- here because adding it later would be a migration over user data.
+  created_at TEXT NOT NULL DEFAULT '',
+  deleted_at TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX attachment_blobs_media ON attachment_blobs(media_id);
 CREATE INDEX attachment_blobs_sha ON attachment_blobs(sha256);
@@ -1164,8 +1173,8 @@ func (s *Store) putBlobLocked(ref blobRef, st staged) {
 	if err := s.blobs.commit(ref, st); err != nil {
 		panic("store blobs commit: " + err.Error())
 	}
-	s.sqlExec(`INSERT OR REPLACE INTO attachment_blobs(id, media_id, filename, mime, sha256, size) VALUES(?,?,?,?,?,?)`,
-		ref.ID, ref.MediaID, ref.Filename, ref.MimeType, ref.SHA, ref.Size)
+	s.sqlExec(`INSERT OR REPLACE INTO attachment_blobs(id, media_id, filename, mime, sha256, size, created_at) VALUES(?,?,?,?,?,?,?)`,
+		ref.ID, ref.MediaID, ref.Filename, ref.MimeType, ref.SHA, ref.Size, ref.CreatedAt)
 }
 
 // stageBytesLocked is the in-hand-bytes path (fixture seed, snapshot
@@ -1180,16 +1189,18 @@ func (s *Store) stageBytesLocked(body []byte) staged {
 }
 
 func (s *Store) blobRefLocked(id string) (blobRef, bool) {
-	return s.scanBlobRow(`SELECT id, media_id, filename, mime, sha256, size FROM attachment_blobs WHERE id=?`, id)
+	return s.scanBlobRow(blobRowSelect+` WHERE id=? AND deleted_at=''`, id)
 }
 
 func (s *Store) blobRefByMediaLocked(media string) (blobRef, bool) {
-	return s.scanBlobRow(`SELECT id, media_id, filename, mime, sha256, size FROM attachment_blobs WHERE media_id=?`, media)
+	return s.scanBlobRow(blobRowSelect+` WHERE media_id=? AND deleted_at=''`, media)
 }
+
+const blobRowSelect = `SELECT id, media_id, filename, mime, sha256, size, created_at FROM attachment_blobs`
 
 func (s *Store) scanBlobRow(q string, args ...any) (blobRef, bool) {
 	var r blobRef
-	err := s.db.QueryRow(q, args...).Scan(&r.ID, &r.MediaID, &r.Filename, &r.MimeType, &r.SHA, &r.Size)
+	err := s.db.QueryRow(q, args...).Scan(&r.ID, &r.MediaID, &r.Filename, &r.MimeType, &r.SHA, &r.Size, &r.CreatedAt)
 	if err == sql.ErrNoRows {
 		return blobRef{}, false
 	}

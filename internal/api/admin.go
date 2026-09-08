@@ -27,6 +27,8 @@ func (s *Server) handleAdmin(w http.ResponseWriter, r *http.Request) {
 		s.apiDiff(w, r)
 	case r.Method == http.MethodGet && path == "/compatibility":
 		s.apiCompatibility(w, r)
+	case r.Method == http.MethodGet && path == "/storage":
+		s.apiStorage(w, r)
 	case r.Method == http.MethodGet && path == "/diagnostics":
 		s.apiDiagnostics(w, r)
 	case r.Method == http.MethodPost && path == "/fixtures/apply":
@@ -42,6 +44,17 @@ func (s *Server) handleAdmin(w http.ResponseWriter, r *http.Request) {
 	default:
 		writeJSON(w, http.StatusNotFound, map[string]any{"error": "unknown admin path", "path": path})
 	}
+}
+
+// apiStorage answers "what do the attachments cost, and since when". The
+// bytes live in a directory beside the database, so a client — including
+// one on another machine talking to this origin over a paired serve —
+// cannot measure them itself; this is where it asks.
+func (s *Server) apiStorage(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]any{
+		"attachments":    s.st.AttachmentStorage(),
+		"maxUploadBytes": s.cfg.AttachmentCap(),
+	})
 }
 
 func (s *Server) apiOverview(w http.ResponseWriter, r *http.Request) {

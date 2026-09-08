@@ -84,7 +84,24 @@ func migrateV1toV2(db *sql.DB, path, blobDir string) error {
 	if _, err := db.Exec(`VACUUM INTO ?`, tmpBakPath); err != nil {
 		return fmt.Errorf("pre-migration copy %s: %w", bak, err)
 	}
-	if err := os.Rename(tmpBakPath, bak); err != nil {
+	// Re-read the version with the snapshot in hand: another process may
+	// have finished migrating between the check at the top and now, which
+	// would make this snapshot a POST-migration one — a v2 file with an
+	// empty attachments table. Renaming that over the backup replaces the
+	// rollback copy with a workspace that has no attachments, which is
+	// worse than having no backup at all, because the runbook tells people
+	// to restore from it.
+	if err := db.QueryRow(`PRAGMA user_version`).Scan(&have); err == nil && have >= 2 {
+		_ = os.Remove(tmpBakPath)
+		return nil
+	}
+	// And never replace a backup that is already there: os.Rename would,
+	// on every platform. An existing .pre-v2.bak was taken before some
+	// earlier attempt, so by construction it is a v1 copy — the one we
+	// want.
+	if _, err := os.Stat(bak); err == nil {
+		_ = os.Remove(tmpBakPath)
+	} else if err := os.Rename(tmpBakPath, bak); err != nil {
 		_ = os.Remove(tmpBakPath)
 		return fmt.Errorf("pre-migration copy %s: %w", bak, err)
 	}
@@ -144,13 +161,27 @@ func migrateV1toV2(db *sql.DB, path, blobDir string) error {
 		return err
 	}
 	for _, r := range refs {
-		if _, err := tx.Exec(`INSERT OR REPLACE INTO attachment_blobs(id, media_id, filename, mime, sha256, size) VALUES(?,?,?,?,?,?)`,
-			r.ID, r.MediaID, r.Filename, r.MimeType, r.SHA, r.Size); err != nil {
+		if _, err := tx.Exec(`INSERT OR REPLACE INTO attachment_blobs(id, media_id, filename, mime, sha256, size, created_at) VALUES(?,?,?,?,?,?,?)`,
+			r.ID, r.MediaID, r.Filename, r.MimeType, r.SHA, r.Size, r.CreatedAt); err != nil {
 			return err
 		}
 	}
-	if _, err := tx.Exec(`DELETE FROM attachments`); err != nil {
-		return err
+	// Delete only the ids that were staged, never the whole table. An
+	// older binary can still have this persist open — the open marker is
+	// advisory and multi-process persist is supported (gadak GDK-1180) —
+	// and it goes on writing uploads into `attachments` as BLOBs while
+	// this runs. Extraction takes minutes on a workspace of any size, so
+	// a row inserted after the scan at the top of this function was never
+	// staged: `DELETE FROM attachments` would destroy the only copy of it.
+	// Leaving it means the bytes are still in the file, recoverable by
+	// hand, instead of gone.
+	for _, r := range refs {
+		if _, err := tx.Exec(`DELETE FROM attachments WHERE id=?`, r.ID); err != nil {
+			return err
+		}
+	}
+	if n, err := txCount(tx, `SELECT COUNT(*) FROM attachments`); err == nil && n > 0 {
+		fmt.Fprintf(os.Stderr, "issuetap: %d attachment row(s) appeared while migrating and were left in place — another process is writing to this persist with an older build; stop it and reopen\n", n)
 	}
 	if _, err := tx.Exec(`PRAGMA user_version = 2`); err != nil {
 		return err
@@ -185,10 +216,17 @@ func attachmentMetaFromIssues(db *sql.DB) (map[string]blobRef, error) {
 			return nil, err
 		}
 		for _, a := range jsonDecode[storedIssue](b).Attachments {
-			out[a.ID] = blobRef{ID: a.ID, MediaID: a.MediaID, Filename: a.Filename, MimeType: a.MimeType}
+			out[a.ID] = blobRef{ID: a.ID, MediaID: a.MediaID, Filename: a.Filename,
+				MimeType: a.MimeType, CreatedAt: a.Created}
 		}
 	}
 	return out, rows.Err()
+}
+
+func txCount(tx *sql.Tx, q string) (int, error) {
+	var n int
+	err := tx.QueryRow(q).Scan(&n)
+	return n, err
 }
 
 func scanStrings(db *sql.DB, q string) ([]string, error) {

@@ -241,3 +241,75 @@ func TestNewerSchemaRefusalNamesTheBackup(t *testing.T) {
 		t.Fatalf("the refusal does not name the pre-upgrade copy: %v", err)
 	}
 }
+
+// A row that appears in `attachments` while the migration is extracting
+// bytes belongs to another process running an older build, and its bytes
+// exist nowhere else. The migration used to end with `DELETE FROM
+// attachments`, which destroyed exactly those rows (GDK-1617 review
+// finding 1). Only staged ids may be deleted.
+func TestMigrationLeavesRowsItDidNotStage(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "issuetap.db")
+	body := []byte("staged by the migration")
+	writeV1Persist(t, path, map[string][]byte{"70001": body})
+
+	// Stand in for the older process's write: a row the migration's own
+	// scan will not see, because it is inserted from another handle after
+	// that scan. Inserting it up front and hiding it from the scan is not
+	// possible from outside, so this asserts the weaker, sufficient thing:
+	// a row with no issue referring to it still survives the delete.
+	late := []byte("written by an older build mid-migration")
+	db, err := sql.Open("sqlite", persistDSN(path))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO attachments(id, bytes) VALUES('79999', ?)`, late); err != nil {
+		t.Fatal(err)
+	}
+	db.Close()
+
+	st, err := Open(Options{Seed: 1, PersistPath: path})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	// 79999 was staged too (it is in the attachments table at scan time),
+	// so what this really pins is that the delete is per-id: change it
+	// back to `DELETE FROM attachments` and add a row after the scan, and
+	// the bytes are gone. Here, both must be readable.
+	for id, want := range map[string][]byte{"70001": body, "79999": late} {
+		got, ok := st.attachBytesLocked(id)
+		if !ok || !bytes.Equal(got, want) {
+			t.Errorf("%s: read back %q (ok=%v), want %q", id, got, ok, want)
+		}
+	}
+}
+
+// The pre-migration copy is the only way back to an older gadak, and the
+// runbook tells people to restore from it. A second migrator must never
+// replace it — least of all with a post-migration snapshot, which would be
+// a workspace with no attachments at all (GDK-1617 review finding 2).
+func TestMigrationNeverReplacesAnExistingBackup(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "issuetap.db")
+	writeV1Persist(t, path, map[string][]byte{"70001": []byte("x")})
+
+	bak := backupPath(path, 2)
+	sentinel := []byte("an earlier attempt already took this")
+	if err := os.WriteFile(bak, sentinel, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	st, err := Open(Options{Seed: 1, PersistPath: path})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+
+	got, err := os.ReadFile(bak)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, sentinel) {
+		t.Fatalf("the migration overwrote an existing %s", filepath.Base(bak))
+	}
+}

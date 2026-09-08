@@ -85,15 +85,55 @@ Jira layout `2006-01-02T15:04:05.000-0700`.
 
 JQL subset: `project`, `key`, `updated`, `created`, `status`,
 `statusCategory`, `issuetype`/`type`, `priority`, `assignee`, `reporter`,
-`summary`, `labels`, `fixVersion`, `component`,
+`summary`, `labels`, `fixVersion`, `component`, `sprint`,
 `AND`/`OR`/`NOT`, `IN`, `ORDER BY` (`updated`/`created`/`key`).
 Unparseable JQL is HTTP 400 — the server does not silently return every
 issue. A clause or ORDER BY naming a field outside that set is HTTP 400
 too (Cloud's unknown-field message plus the supported list), never a
 silent 0-rows/all-rows evaluation or a silent key-order fallback.
 
+`sprint` supports `=`, `!=`, `IN`, `NOT IN` (by id or name) and
+`IS [NOT] EMPTY`, plus `openSprints()`, `futureSprints()` and
+`closedSprints()` (those three are sprint-only; on any other field they
+are HTTP 400). One simplification: membership tests read only the issue's
+**current** sprint (the last of its sprint list). Real Cloud `sprint = N`
+matches issues that have *ever* been in `N` — a historical query issuetap
+does not answer.
+
 CQL subset: `space`, `type=page|comment`, `lastModified >=`, `ORDER BY`.
 Unsupported clauses are HTTP 400.
+
+## Jira Software Agile 1.0
+
+Base path: `/rest/agile/1.0` (both dialects). This is the surface gadak's
+first-class sprints talk to — API compatibility, not a planning feature
+(`docs/decisions/0002-agile-api-surface.md`). Boards are derived, one
+scrum board per project, created lazily by the first board listing and
+materialized in project-key order so ids do not depend on which filter
+asked. Everything else under the prefix stays an honest 501.
+
+| Area | Endpoints | Level | Scope |
+| --- | --- | --- | --- |
+| Boards | `GET /board` | Supported | `{maxResults,startAt,total,isLast,values}`. `projectKeyOrId` (key or numeric id) and `type` (`scrum` matches; anything else is an empty list, not an error). `location` carries `projectId`/`projectKey`/`name`. |
+| Board sprints | `GET /board/{id}/sprint` | Supported | Creation order; `state=` takes comma-separated `future,active,closed` (lowercase; unknown token is HTTP 400). `isLast`/`total` paging. Unknown board is 404 with Jira Software's permission-or-existence message. |
+| Sprint | `GET /sprint/{id}` | Supported | `state` lowercase; unset dates are omitted, not null. |
+| Sprint issues | `GET /sprint/{id}/issue` | Supported | `{issues:[…]}` — every issue whose **current** sprint is `{id}`, same renderer as search. |
+| Sprint create | `POST /sprint` | Supported | `name` + `originBoardId` required (HTTP 400 naming the field); optional `goal`, `startDate`, `endDate`. Created `future`, 201. |
+| Sprint update | `POST/PUT /sprint/{id}` | Supported | Partial update of `name`/`goal`/`state`/`startDate`/`endDate`. `future→active` requires a start and end date after the merge (else HTTP 400) and stamps `activatedDate`; `active→closed` stamps `completeDate` and sweeps the sprint's incomplete issues (by `statusCategory.key`, never a status name) to the backlog while done issues keep the sprint; any other transition is HTTP 400 naming both states. Dates come from the store clock — the server has no wall time. |
+| Sprint move | `POST /sprint/{id}/issue` | Supported | `{"issues":[KEY,…]}` → 204 empty. Max 50 keys (HTTP 400). Unknown key is 404 naming it in `errors`; nothing is half-applied. Closed sprint is HTTP 400. |
+| Backlog move | `POST /backlog/issue` | Supported | Same body and cap; clears sprint membership wholesale. |
+
+`GET /field` includes `customfield_10020` (Sprint) with
+`schema.custom = com.pyxis.greenhopper.jira:gh-sprint` — the half gadak
+discovers the field by. On the issue, `fields.customfield_10020` is
+Cloud's object array of every sprint the issue has been in, oldest first
+(current sprint last; `null` when never in one); unset dates inside the
+objects render `null`. It is **not** writable through the issue API:
+editmeta/createmeta exclude it and `PUT /issue` rejects it — sprint
+membership changes only through the Agile routes above. Sprint moves and
+sweeps append a `Sprint` changelog item (`fieldId` `customfield_10020`,
+`from`/`to` are sprint ids, `fromString`/`toString` the names; backlog
+moves `to` `""`).
 
 ## Data Center v2 (read path)
 
@@ -107,9 +147,14 @@ This is enough to develop a DC client. It is not a verified DC product.
 
 ## Unsupported (honest 501)
 
-`GET /dashboard`, `GET /board`, `GET /rest/agile/1.0/board`, webhooks,
+`GET /dashboard`, `GET /board` (under `/rest/api/{v}`, not the Agile API),
+webhooks,
 permissions, application-properties, group/member, JQL autocomplete,
 expression eval, Confluence `/wiki/api/v2/pages`, `/wiki/rest/api/user/current`.
+
+Agile subpaths beyond the table above — epics, board configuration, every
+method the routes do not name (e.g. `DELETE /sprint/{id}`) — are 501, not
+404.
 
 A path after `/project/{key}` other than `versions` and `components` is an
 unimplemented sub-resource (HTTP 501), not a missing project.

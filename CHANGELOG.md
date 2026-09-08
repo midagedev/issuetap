@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- The Jira Software Agile API (`/rest/agile/1.0`) is served: one scrum
+  board per project (materialized lazily), sprint create/read/update with
+  the two Jira transitions (start needs dates, close sweeps incomplete
+  issues to the backlog while done ones keep the sprint), sprint and
+  backlog issue moves, the `customfield_10020` gh-sprint field on
+  issues, and `sprint` in JQL with `openSprints()`/`futureSprints()`/
+  `closedSprints()` (gadak GDK-1666, `docs/decisions/0002-agile-api-surface.md`).
 - Attachment bytes live beside the database, not inside it. A file-backed
   store writes one content-addressed file per distinct attachment under
   `<persist-dir>/blobs/<sha[0:2]>/<sha256>`; `attachment_blobs` holds the

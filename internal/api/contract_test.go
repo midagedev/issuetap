@@ -826,20 +826,32 @@ func TestUnsupported(t *testing.T) {
 	}
 }
 
+// The agile board list was this file's unsupported-endpoint example until
+// the route shipped (gadak GDK-1666); TestUnsupported carries the honest
+// 501 half now. Here the route must answer a real paged envelope — never
+// a 404, never a stale 501.
 func TestUnsupportedNot404(t *testing.T) {
 	ts := testServer(t, locale.EN, dialect.Cloud)
 	defer ts.Close()
 	res := authGet(t, ts, "/rest/agile/1.0/board")
 	if res.StatusCode == 404 {
-		t.Fatal("known unimplemented route returned 404")
+		t.Fatal("agile board list returned 404")
 	}
-	if res.StatusCode != 501 {
+	if res.StatusCode != http.StatusOK {
 		t.Fatalf("status %d", res.StatusCode)
 	}
-	raw, _ := io.ReadAll(res.Body)
-	res.Body.Close()
-	if !strings.Contains(string(raw), "unsupported_endpoint") {
-		t.Fatalf("body=%s", raw)
+	v := decode(t, res)
+	for _, k := range []string{"maxResults", "startAt", "total", "isLast", "values"} {
+		if _, ok := v[k]; !ok {
+			t.Fatalf("board list missing %q: %v", k, v)
+		}
+	}
+	vals := v["values"].([]any)
+	if len(vals) != 1 {
+		t.Fatalf("values=%v", vals)
+	}
+	if b := vals[0].(map[string]any); b["name"] != "TAP board" {
+		t.Fatalf("board=%v", b)
 	}
 }
 

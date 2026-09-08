@@ -36,7 +36,9 @@ import (
 // persistSchemaVersion is this binary's on-disk schema stamp
 // (PRAGMA user_version). A lower version is migrated (see migrate.go); a
 // higher one is refused, because this build cannot know what it holds.
-const persistSchemaVersion = 2
+// v3 adds the agile tables (boards, sprints) — see agileSchema and
+// migrateV2toV3.
+const persistSchemaVersion = 3
 
 const sqliteMagic = "SQLite format 3\x00"
 
@@ -74,7 +76,30 @@ CREATE INDEX attachment_blobs_media ON attachment_blobs(media_id);
 CREATE INDEX attachment_blobs_sha ON attachment_blobs(sha256);
 `
 
-const workingSchema = attachmentBlobsSchema + `
+// agileSchema is the Jira Software half: boards and sprints (gadak
+// GDK-1666, docs/decisions/0002). Separate so the v2 → v3 migration
+// creates exactly what a fresh database gets — one owner for the DDL,
+// same rule as attachmentBlobsSchema. Issue membership lives inside the
+// issue blob (storedIssue.SprintIDs), not a join table: the persist
+// pattern is whole-issue JSON rows, and membership is only ever read
+// issue-shaped.
+const agileSchema = `
+CREATE TABLE boards (
+  id INTEGER PRIMARY KEY,
+  project_key TEXT NOT NULL,
+  blob BLOB NOT NULL
+);
+CREATE INDEX boards_project ON boards(project_key);
+
+CREATE TABLE sprints (
+  id INTEGER PRIMARY KEY,
+  board_id INTEGER NOT NULL,
+  blob BLOB NOT NULL
+);
+CREATE INDEX sprints_board ON sprints(board_id);
+`
+
+const workingSchema = attachmentBlobsSchema + agileSchema + `
 CREATE TABLE users (
   account_id TEXT PRIMARY KEY,
   name TEXT NOT NULL DEFAULT '',
@@ -352,6 +377,7 @@ type storedIssue struct {
 	ResolutionID    string                `json:"resolutionId"`
 	Created         string                `json:"created"`
 	Updated         string                `json:"updated"`
+	SprintIDs       []int64               `json:"sprintIds,omitempty"`
 	Comments        []storedComment       `json:"comments"`
 	Attachments     []storedAttachment    `json:"attachments"`
 	DevPRs          []model.DevPR         `json:"devPrs"`
@@ -459,6 +485,7 @@ func encodeIssue(iss *model.Issue) []byte {
 		Labels: iss.Labels, Components: iss.Components, FixVersions: iss.FixVersions,
 		Versions: iss.Versions, Duedate: iss.Duedate, ResolutionID: iss.ResolutionID,
 		Created: iss.Created, Updated: iss.Updated,
+		SprintIDs:      iss.SprintIDs,
 		DevPRs:         iss.DevPRs,
 		DevDeployments: iss.DevDeployments, DevBuilds: iss.DevBuilds,
 		RemoteLinks: iss.RemoteLinks,
@@ -494,6 +521,7 @@ func decodeIssue(b []byte) model.Issue {
 		Labels: st.Labels, Components: st.Components, FixVersions: st.FixVersions,
 		Versions: st.Versions, Duedate: st.Duedate, ResolutionID: st.ResolutionID,
 		Created: st.Created, Updated: st.Updated,
+		SprintIDs:      st.SprintIDs,
 		DevPRs:         st.DevPRs,
 		DevDeployments: st.DevDeployments, DevBuilds: st.DevBuilds,
 		RemoteLinks: st.RemoteLinks,
@@ -1066,6 +1094,102 @@ func (s *Store) issueCountLocked() int {
 
 func (s *Store) issueKeysLocked() []string {
 	return s.sqlStrings(`SELECT key FROM issues ORDER BY key`)
+}
+
+// --- boards & sprints ---
+
+func encodeBoard(b *model.Board) []byte { return jsonEncode(*b) }
+
+func encodeSprint(sp *model.Sprint) []byte { return jsonEncode(*sp) }
+
+func (s *Store) putBoardLocked(b *model.Board) {
+	s.sqlExec(`INSERT OR REPLACE INTO boards(id, project_key, blob) VALUES(?,?,?)`,
+		b.ID, b.ProjectKey, encodeBoard(b))
+}
+
+func (s *Store) boardByIDLocked(id int64) *model.Board {
+	b, ok := s.sqlBlob(`SELECT blob FROM boards WHERE id=?`, id)
+	if !ok {
+		return nil
+	}
+	bd := jsonDecode[model.Board](b)
+	return &bd
+}
+
+func (s *Store) boardByProjectLocked(key string) *model.Board {
+	if key == "" {
+		return nil
+	}
+	b, ok := s.sqlBlob(`SELECT blob FROM boards WHERE project_key=?`, key)
+	if !ok {
+		return nil
+	}
+	bd := jsonDecode[model.Board](b)
+	return &bd
+}
+
+// boardsLocked is ordered by id so the Agile board list is stable: lazy
+// creation mints ids in project-key order, and the list serves that order.
+func (s *Store) boardsLocked() []*model.Board {
+	blobs := s.sqlBlobs(`SELECT blob FROM boards ORDER BY id`)
+	out := make([]*model.Board, 0, len(blobs))
+	for _, b := range blobs {
+		bd := jsonDecode[model.Board](b)
+		cp := bd
+		out = append(out, &cp)
+	}
+	return out
+}
+
+func (s *Store) putSprintLocked(sp *model.Sprint) {
+	s.sqlExec(`INSERT OR REPLACE INTO sprints(id, board_id, blob) VALUES(?,?,?)`,
+		sp.ID, sp.BoardID, encodeSprint(sp))
+}
+
+func (s *Store) sprintByIDLocked(id int64) *model.Sprint {
+	b, ok := s.sqlBlob(`SELECT blob FROM sprints WHERE id=?`, id)
+	if !ok {
+		return nil
+	}
+	sp := jsonDecode[model.Sprint](b)
+	return &sp
+}
+
+// sprintsByBoardLocked is ordered by id (creation order) — the Agile API
+// serves sprints in the order the board created them.
+func (s *Store) sprintsByBoardLocked(boardID int64) []*model.Sprint {
+	blobs := s.sqlBlobs(`SELECT blob FROM sprints WHERE board_id=? ORDER BY id`, boardID)
+	out := make([]*model.Sprint, 0, len(blobs))
+	for _, b := range blobs {
+		sp := jsonDecode[model.Sprint](b)
+		cp := sp
+		out = append(out, &cp)
+	}
+	return out
+}
+
+// sprintIDsByStateLocked answers the JQL sprint functions (openSprints()
+// & co.): every sprint id currently in the given state. Sprints are few;
+// decoding beats a json_extract dependency.
+func (s *Store) sprintIDsByStateLocked(state string) []string {
+	blobs := s.sqlBlobs(`SELECT blob FROM sprints ORDER BY id`)
+	var out []string
+	for _, b := range blobs {
+		if sp := jsonDecode[model.Sprint](b); sp.State == state {
+			out = append(out, fmt.Sprintf("%d", sp.ID))
+		}
+	}
+	return out
+}
+
+// maxBoardIDLocked / maxSprintIDLocked feed the Open-time seq floors: a
+// restarted persist must never hand out an id a stored row already has.
+func (s *Store) maxBoardIDLocked() int {
+	return s.sqlCount(`SELECT COALESCE(MAX(id), 0) FROM boards`)
+}
+
+func (s *Store) maxSprintIDLocked() int {
+	return s.sqlCount(`SELECT COALESCE(MAX(id), 0) FROM sprints`)
 }
 
 // --- spaces ---

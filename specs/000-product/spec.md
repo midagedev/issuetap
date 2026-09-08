@@ -105,6 +105,8 @@ parent stays allowed (sub-task-requires-parent is out of scope).
 
 - Being a usable issue tracker
 - Full JQL / CQL
-- Boards, dashboards, Forge apps
+- Boards, dashboards, Forge apps (the Jira Software Agile **API** gadak's
+  sprints talk to is in scope — `docs/decisions/0002-agile-api-surface.md`;
+  a planning UI is not)
 - Verified Data Center parity
 - Outbound calls to a real site at runtime

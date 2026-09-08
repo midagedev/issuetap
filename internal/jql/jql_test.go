@@ -113,7 +113,7 @@ func TestFilterComponent(t *testing.T) {
 // honest errors, the CQL pattern.
 func TestParseUnknownFieldRejected(t *testing.T) {
 	for _, raw := range []string{
-		`sprint = 5`,
+		`watcher = 5`, // sprint was here until it became a real field (GDK-1666)
 		`resolution != Done AND project = TAP`,
 		`project = TAP OR epic in (A, B)`,
 		`text ~ "foo"`,

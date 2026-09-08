@@ -100,7 +100,12 @@ func (s *Server) priorityJSON(p model.Priority) map[string]any {
 
 func (s *Server) issueJSON(r *http.Request, iss *model.Issue, fields []string, expand string) map[string]any {
 	want := fieldSet(fields)
-	all := want["*all"] || len(want) == 0
+	// "sprint" and "customfield_10020" name the same rendered field; a
+	// request may use either.
+	if want["sprint"] {
+		want["customfield_10020"] = true
+	}
+	all := want["*all"] || want["*navigable"] || len(want) == 0
 	loc := s.st.Locale()
 
 	proj := s.st.Project(iss.ProjectKey)
@@ -221,6 +226,12 @@ func (s *Server) issueJSON(r *http.Request, iss *model.Issue, fields []string, e
 	if iss.ParentKey != "" {
 		full["parent"] = map[string]any{"key": iss.ParentKey}
 	}
+	// The Sprint field (customfield_10020, gadak GDK-1666): Cloud's object
+	// array, every sprint the issue has been in, oldest first — the current
+	// sprint is the last element. nil when the issue never entered a
+	// sprint. The key is always set on full, so a polluted Custom entry of
+	// the same id can never shadow it.
+	full["customfield_10020"] = s.sprintFieldValue(iss)
 	if iss.ResolutionID != "" {
 		if res := resolutionByID(s.st, iss.ResolutionID); res != nil {
 			cp := locale.OverlayResolution(loc, *res)
@@ -274,6 +285,32 @@ func resolutionByID(st *store.Store, id string) *model.Resolution {
 		}
 	}
 	return nil
+}
+
+// sprintFieldValue is customfield_10020 on the issue: Cloud's compact
+// sprint objects (boardId, not the agile route's originBoardId; unset
+// dates render null). Ids the store no longer resolves are skipped — a
+// sprint row lost from an old persist must not corrupt the array.
+func (s *Server) sprintFieldValue(iss *model.Issue) any {
+	if len(iss.SprintIDs) == 0 {
+		return nil
+	}
+	arr := make([]any, 0, len(iss.SprintIDs))
+	for _, id := range iss.SprintIDs {
+		sp, err := s.st.Sprint(id)
+		if err != nil || sp == nil {
+			continue
+		}
+		arr = append(arr, map[string]any{
+			"id": sp.ID, "name": sp.Name, "state": sp.State, "boardId": sp.BoardID,
+			"goal":          sp.Goal,
+			"startDate":     emptyNil(sp.StartDate),
+			"endDate":       emptyNil(sp.EndDate),
+			"completeDate":  emptyNil(sp.CompleteDate),
+			"activatedDate": emptyNil(sp.ActivatedDate),
+		})
+	}
+	return arr
 }
 
 func (s *Server) bodyForDialect(raw json.RawMessage, text string) any {

@@ -203,6 +203,12 @@ func (s *Server) handleAtlassian(w http.ResponseWriter, r *http.Request, path st
 		s.handleConfluence(w, r, path)
 		return
 	}
+	// Jira Software Agile lives on its own prefix, ahead of the api/{v}
+	// suffix normalization in handleJira.
+	if path == agilePrefix || strings.HasPrefix(path, agilePrefix+"/") {
+		s.handleAgile(w, r, path)
+		return
+	}
 	s.handleJira(w, r, path)
 }
 

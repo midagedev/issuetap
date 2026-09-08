@@ -150,8 +150,8 @@ func (s *Store) EditMeta(key string) (map[string]any, error) {
 		out[spec.id] = meta
 	}
 	for _, f := range s.Fields() {
-		if !f.Custom {
-			continue
+		if !f.Custom || f.ID == sprintFieldID {
+			continue // Sprint is advertised by GET /field, written by the Agile API
 		}
 		out[f.ID] = customEditMeta(f)
 	}
@@ -190,8 +190,8 @@ func (s *Store) CreateFields(projectIDOrKey, issueTypeID string) ([]map[string]a
 		out = append(out, row)
 	}
 	for _, f := range s.Fields() {
-		if !f.Custom {
-			continue
+		if !f.Custom || f.ID == sprintFieldID {
+			continue // Sprint is advertised by GET /field, written by the Agile API
 		}
 		meta := customEditMeta(f)
 		row := map[string]any{
@@ -332,6 +332,9 @@ func kindFromFixture(f fixtures.Field) string {
 }
 
 func (s *Store) upsertField(f fixtures.Field) {
+	if f.ID == sprintFieldID {
+		return // the store owns the Sprint row (sprintField); a fixture cannot reshape it
+	}
 	kind := kindFromFixture(f)
 	typ, items := schemaTypeItems(kind, model.FieldSchema{Type: f.Type, Items: f.Items})
 	if f.Type == "array" && f.Items != "" && kind != KindOptionArray {
@@ -359,7 +362,11 @@ func (s *Store) upsertField(f fixtures.Field) {
 func fixtureFieldsFromStore(fields []model.FieldInfo) []fixtures.Field {
 	var out []fixtures.Field
 	for _, f := range fields {
-		if !f.Custom {
+		// The Sprint row is installed by the store (sprintField), not
+		// authored by fixtures: re-emitting it here would round-trip through
+		// upsertField, which strips schema.custom — the exact half gadak
+		// discovers the field by.
+		if !f.Custom || f.ID == sprintFieldID {
 			continue
 		}
 		ff := fixtures.Field{
@@ -382,6 +389,13 @@ func fixtureFieldsFromStore(fields []model.FieldInfo) []fixtures.Field {
 func (s *Store) validateCustomWriteLocked(id string, v any) error {
 	f := s.fieldByIDLocked(id)
 	if f == nil || !f.Custom {
+		return FieldError{Field: id, Msg: "Field '" + id + "' cannot be set. It is not on the appropriate screen, or unknown."}
+	}
+	if id == sprintFieldID {
+		// Sprint is not a generic custom field: its kind falls through the
+		// switch below unvalidated, and a "successful" write would land in
+		// Custom and be shadowed on GET by the rendered array. The Agile API
+		// is the only writer.
 		return FieldError{Field: id, Msg: "Field '" + id + "' cannot be set. It is not on the appropriate screen, or unknown."}
 	}
 	switch fieldKind(*f) {

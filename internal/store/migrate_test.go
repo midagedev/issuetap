@@ -30,8 +30,11 @@ func writeV1Persist(t *testing.T, path string, attach map[string][]byte) {
 	defer db.Close()
 	db.SetMaxOpenConns(1)
 	v1Schema := strings.TrimPrefix(workingSchema, attachmentBlobsSchema)
+	// agileSchema joined the working schema at v3; a v1 binary predates it,
+	// so the fabricated v1 file must not carry the boards/sprints tables.
+	v1Schema = strings.TrimPrefix(v1Schema, agileSchema)
 	if v1Schema == workingSchema {
-		t.Fatal("workingSchema no longer starts with attachmentBlobsSchema — this fixture is not v1")
+		t.Fatal("workingSchema no longer starts with attachmentBlobsSchema + agileSchema — this fixture is not v1")
 	}
 	if _, err := db.Exec(v1Schema); err != nil {
 		t.Fatal(err)

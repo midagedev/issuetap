@@ -78,6 +78,17 @@ func Inventory() []Route {
 		{Method: "GET", Path: "/rest/dev-status/{v}/issue/detail", Level: Supported, Notes: "applicationType and dataType required; Cloud 500 param shape", Cloud: true, DC: false},
 		{Method: "POST", Path: "/rest/dev-status/{v}/issue/link", Level: Supported, Notes: "upserts one pull-request link by URL", Cloud: true, DC: false},
 
+		// Jira Software Agile (gadak GDK-1666, docs/decisions/0002)
+		{Method: "GET", Path: "/rest/agile/1.0/board", Level: Supported, Notes: "one scrum board per project, created lazily in project-key order; projectKeyOrId and type filters; startAt/maxResults paging", Cloud: true, DC: true},
+		{Method: "GET", Path: "/rest/agile/1.0/board/{id}/sprint", Level: Supported, Notes: "creation order; state filter takes comma-separated future,active,closed; unknown board 404", Cloud: true, DC: true},
+		{Method: "GET", Path: "/rest/agile/1.0/sprint/{id}", Level: Supported, Cloud: true, DC: true},
+		{Method: "GET", Path: "/rest/agile/1.0/sprint/{id}/issue", Level: Supported, Notes: "issues whose current sprint is {id}", Cloud: true, DC: true},
+		{Method: "POST", Path: "/rest/agile/1.0/sprint", Level: Supported, Notes: "name + originBoardId required (400 naming the field); created future", Cloud: true, DC: true},
+		{Method: "POST", Path: "/rest/agile/1.0/sprint/{id}", Level: Supported, Notes: "partial update of name/goal/state/startDate/endDate; future→active needs both dates, active→closed sweeps incomplete issues to the backlog; anything else 400 naming the states", Cloud: true, DC: true},
+		{Method: "PUT", Path: "/rest/agile/1.0/sprint/{id}", Level: Supported, Notes: "same partial update as POST", Cloud: true, DC: true},
+		{Method: "POST", Path: "/rest/agile/1.0/sprint/{id}/issue", Level: Supported, Notes: "max 50 keys; unknown key 404 naming it; closed sprint 400", Cloud: true, DC: true},
+		{Method: "POST", Path: "/rest/agile/1.0/backlog/issue", Level: Supported, Notes: "clears sprint membership wholesale; unknown key 404 naming it", Cloud: true, DC: true},
+
 		// Confluence Cloud (gadak confluence.Client)
 		{Method: "GET", Path: "/wiki/rest/api/space", Level: Supported, Cloud: true, DC: false},
 		{Method: "GET", Path: "/wiki/rest/api/space/{key}", Level: Supported, Cloud: true, DC: false},
@@ -97,9 +108,8 @@ func Inventory() []Route {
 		{Method: "GET", Path: "/rest/api/content/{id}/child/comment", Level: Partial, Cloud: false, DC: true},
 
 		// Known unimplemented — must not 404
-		{Method: "GET", Path: "/rest/api/{v}/dashboard", Level: Unsupported, Notes: "boards/dashboards are out of v0", Cloud: true, DC: true},
+		{Method: "GET", Path: "/rest/api/{v}/dashboard", Level: Unsupported, Notes: "dashboards are out of v0", Cloud: true, DC: true},
 		{Method: "GET", Path: "/rest/api/{v}/board", Level: Unsupported, Cloud: true, DC: true},
-		{Method: "GET", Path: "/rest/agile/1.0/board", Level: Unsupported, Cloud: true, DC: true},
 		{Method: "GET", Path: "/rest/api/{v}/webhook", Level: Unsupported, Cloud: true, DC: true},
 		{Method: "POST", Path: "/rest/api/{v}/webhook", Level: Unsupported, Cloud: true, DC: true},
 		{Method: "GET", Path: "/rest/api/{v}/permissions", Level: Unsupported, Cloud: true, DC: true},

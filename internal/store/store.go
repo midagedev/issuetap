@@ -168,6 +168,7 @@ func openStore(opt Options) (*Store, error) {
 		return nil, err
 	}
 	s.loadMetaLocked()
+	s.ensureSprintFieldLocked()
 	s.seedSeqsLocked()
 	s.seedClockLocked()
 	return s, nil
@@ -320,6 +321,31 @@ func (s *Store) installDefaultCatalog() {
 	s.replaceFieldsLocked(defaultFields())
 }
 
+// sprintFieldID is the Jira Software Sprint field. Its GET /field row is
+// how gadak discovers the field (schema.custom ends in
+// com.pyxis.greenhopper.jira:gh-sprint); its value is written only by the
+// Agile API, never by issue create/edit.
+const sprintFieldID = "customfield_10020"
+
+// sprintField is that row. One owner: defaultFields installs it on fresh
+// stores, ensureSprintFieldLocked backfills it on persists that predate it.
+func sprintField() model.FieldInfo {
+	return model.FieldInfo{
+		ID: sprintFieldID, Key: "sprint", Name: "Sprint", Custom: true,
+		Clause:    []string{"cf[10020]", "Sprint"},
+		Schema:    model.FieldSchema{Type: "array", Items: "json", Custom: "com.pyxis.greenhopper.jira:gh-sprint", CustomID: 10020},
+		Orderable: true, Navigable: true, Searchable: true,
+	}
+}
+
+// ensureSprintFieldLocked installs the Sprint field row on a persist whose
+// fields table predates it. Idempotent: a row already there stays.
+func (s *Store) ensureSprintFieldLocked() {
+	if s.fieldByIDLocked(sprintFieldID) == nil {
+		s.putFieldLocked(sprintField())
+	}
+}
+
 func defaultFields() []model.FieldInfo {
 	sys := []struct{ id, typ string }{
 		{"issuetype", "issuetype"}, {"project", "project"}, {"status", "status"},
@@ -330,7 +356,7 @@ func defaultFields() []model.FieldInfo {
 		{"environment", "string"}, {"statusCategory", "statusCategory"}, {"parent", "issuelink"},
 		{"duedate", "date"},
 	}
-	out := make([]model.FieldInfo, 0, len(sys))
+	out := make([]model.FieldInfo, 0, len(sys)+1)
 	for _, f := range sys {
 		out = append(out, model.FieldInfo{
 			ID: f.id, Key: f.id, Name: f.id, Custom: false,
@@ -339,7 +365,7 @@ func defaultFields() []model.FieldInfo {
 			Clause: []string{f.id},
 		})
 	}
-	return out
+	return append(out, sprintField())
 }
 
 // Locale is the active overlay.
@@ -531,6 +557,10 @@ func (s *Store) seedSeqsLocked() {
 		}
 	}
 	s.floorSeqLocked("page", maxP)
+	// Boards and sprints mint their ids straight from seq:board / seq:sprint
+	// (no offset band), so the floor is the highest stored id.
+	s.floorSeqLocked("board", s.maxBoardIDLocked())
+	s.floorSeqLocked("sprint", s.maxSprintIDLocked())
 }
 
 // seedClockLocked jumps the deterministic clock past every timestamp in
@@ -1280,7 +1310,17 @@ func (s *Store) Lookup() jql.Lookup {
 			}
 			return nil
 		},
-		Location: s.tz,
+		Sprint: func(id int64) *model.Sprint {
+			if sp := s.sprintByIDLocked(id); sp != nil {
+				cp := *sp
+				return &cp
+			}
+			return nil
+		},
+		// Sprint functions (openSprints() & co.) must see live state: the
+		// same query before and after a close returns different rows.
+		SprintIDsByState: s.sprintIDsByStateLocked,
+		Location:         s.tz,
 	}
 }
 
@@ -3737,6 +3777,16 @@ func NotFoundKind(err error) string {
 		return ""
 	}
 	return e.kind
+}
+
+// NotFoundID is the id or key inside an IsNotFound error. Empty when err
+// is not a not-found.
+func NotFoundID(err error) string {
+	e, ok := err.(notFoundError)
+	if !ok {
+		return ""
+	}
+	return e.id
 }
 
 // FieldError is a per-field write rejection (Jira's errors map).

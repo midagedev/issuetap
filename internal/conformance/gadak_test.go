@@ -550,3 +550,88 @@ func hasJSONDirectedLink(links []any, typeName, side, otherKey string) bool {
 	}
 	return false
 }
+
+// TestGadakSprintRoundTrip is the seam for the whole Agile 1.0 surface
+// (gadak GDK-1666): gadak's sprint verbs driving issuetap's boards and
+// sprints end to end — the paged envelope, the lazily materialized board,
+// the gh-sprint field discovery, the state machine and the close sweep.
+// Gadak's own tests hit an httptest fake; only real gadak over real HTTP
+// proves the two sides agree. The sweep is asserted against the origin
+// (TAP-1 in progress is swept, TAP-3 done keeps the sprint), and the
+// mirror must agree afterwards.
+func TestGadakSprintRoundTrip(t *testing.T) {
+	src := gadakSrc(t)
+	if _, err := os.Stat(filepath.Join(src, "cmd", "gadak", "sprint.go")); err != nil {
+		t.Skipf("gadak at %s predates gadak sprint", src)
+	}
+
+	bin := buildGadak(t)
+	root := repoRoot(t)
+	base, _ := startIssuetap(t, filepath.Join(root, "examples/fixtures/tiny.yaml"), locale.EN, nil)
+	home := writeGadakHome(t, base)
+
+	run := func(args ...string) string {
+		cmd := exec.Command(bin, args...)
+		cmd.Env = append(os.Environ(), "GADAK_HOME="+home, "GADAK_PROFILE=")
+		out, err := cmd.CombinedOutput()
+		t.Logf("gadak %s:\n%s", strings.Join(args, " "), out)
+		if err != nil {
+			t.Fatalf("gadak %s: %v\n%s", strings.Join(args, " "), err, out)
+		}
+		return string(out)
+	}
+
+	run("sync", "--full")
+
+	// Board 1 is the tiny fixture's only project, materialized by the sync
+	// that just listed it.
+	created := run("sprint", "create", "1", "Conformance Sprint")
+	if !strings.Contains(created, "future") || !strings.Contains(created, "Conformance Sprint") {
+		t.Fatalf("sprint create output=%q", created)
+	}
+
+	run("sprint", "add", "1", "TAP-1", "TAP-3")
+	run("sprint", "start", "1")
+	run("sprint", "close", "1")
+
+	if v := issueSprintJSON(t, base, "TAP-1"); v != nil {
+		t.Fatalf("TAP-1 sprint after close (incomplete issues are swept): %v", v)
+	}
+	arr, ok := issueSprintJSON(t, base, "TAP-3").([]any)
+	if !ok || len(arr) != 1 {
+		t.Fatalf("TAP-3 sprint after close (done issues keep it): %v", arr)
+	}
+	sp, _ := arr[0].(map[string]any)
+	if sp["state"] != "closed" || sp["name"] != "Conformance Sprint" {
+		t.Fatalf("TAP-3 sprint=%v", sp)
+	}
+
+	// The mirror agrees: list reads the rows the verbs refreshed.
+	listed := run("sprint", "list")
+	if !strings.Contains(listed, "closed") || !strings.Contains(listed, "Conformance Sprint") {
+		t.Fatalf("sprint list output=%q", listed)
+	}
+}
+
+func issueSprintJSON(t *testing.T, base, key string) any {
+	t.Helper()
+	req, err := http.NewRequest(http.MethodGet, base+"/rest/api/3/issue/"+key+"?fields=customfield_10020", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.SetBasicAuth("you@example.com", "issuetap")
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+	var v map[string]any
+	if err := json.NewDecoder(res.Body).Decode(&v); err != nil {
+		t.Fatal(err)
+	}
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("GET %s status %d body %v", key, res.StatusCode, v)
+	}
+	fields, _ := v["fields"].(map[string]any)
+	return fields["customfield_10020"]
+}

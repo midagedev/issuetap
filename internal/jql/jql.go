@@ -7,6 +7,8 @@
 //	updated/created >= / > / <= / < timestamp
 //	status / statusCategory / issuetype / type / priority / assignee / reporter
 //	fixVersion / component (typed arrays on the issue)
+//	sprint = / != / in / not in / is [not] EMPTY, with openSprints(),
+//	  futureSprints(), closedSprints() as values (gadak GDK-1666)
 //	AND / OR / parentheses
 //	ORDER BY updated|created|key ASC|DESC
 //
@@ -47,22 +49,26 @@ type node interface {
 }
 
 type evalCtx struct {
-	projectOf  func(string) string
-	statusOf   func(*model.Issue) (id, name, cat string)
-	typeOf     func(*model.Issue) (id, name string)
-	priorityOf func(*model.Issue) (id, name string)
-	userOf     func(id string) *model.User
-	location   *time.Location
+	projectOf        func(string) string
+	statusOf         func(*model.Issue) (id, name, cat string)
+	typeOf           func(*model.Issue) (id, name string)
+	priorityOf       func(*model.Issue) (id, name string)
+	userOf           func(id string) *model.User
+	sprintNameOf     func(id int64) string
+	sprintIDsByState func(state string) []string
+	location         *time.Location
 }
 
 // Lookup is what the store supplies so JQL can resolve ids to names
 // (and the other way) without importing the store package.
 type Lookup struct {
-	Status    func(id string) *model.Status
-	IssueType func(id string) *model.IssueType
-	Priority  func(id string) *model.Priority
-	User      func(id string) *model.User
-	Location  *time.Location
+	Status           func(id string) *model.Status
+	IssueType        func(id string) *model.IssueType
+	Priority         func(id string) *model.Priority
+	User             func(id string) *model.User
+	Sprint           func(id int64) *model.Sprint
+	SprintIDsByState func(state string) []string
+	Location         *time.Location
 }
 
 type cmpOp string
@@ -91,10 +97,10 @@ var searchableFields = map[string]bool{
 	"status": true, "statuscategory": true, "issuetype": true, "type": true,
 	"priority": true, "assignee": true, "reporter": true, "summary": true,
 	"labels": true, "fixversion": true, "fixversions": true,
-	"component": true, "components": true,
+	"component": true, "components": true, "sprint": true,
 }
 
-const searchableList = "project, key, updated, created, status, statusCategory, issuetype, type, priority, assignee, reporter, summary, labels, fixVersion, component"
+const searchableList = "project, key, updated, created, status, statusCategory, issuetype, type, priority, assignee, reporter, summary, labels, fixVersion, component, sprint"
 
 // sortableFields mirrors orderVal.
 var sortableFields = map[string]bool{"updated": true, "created": true, "key": true}
@@ -123,21 +129,22 @@ func (n notN) match(ctx evalCtx, iss *model.Issue) bool { return !n.kid.match(ct
 
 func (p pred) match(ctx evalCtx, iss *model.Issue) bool {
 	got := p.values(ctx, iss)
+	vals := p.expandFns(ctx)
 	switch p.op {
 	case opIn:
-		return anyIn(got, p.vals)
+		return anyIn(got, vals)
 	case opNin:
-		return !anyIn(got, p.vals)
+		return !anyIn(got, vals)
 	case opEq:
-		return anyIn(got, p.vals)
+		return anyIn(got, vals)
 	case opNeq:
-		return !anyIn(got, p.vals)
+		return !anyIn(got, vals)
 	case opGT, opGTE, opLT, opLTE:
-		if len(p.vals) == 0 {
+		if len(vals) == 0 {
 			return false
 		}
 		left, ok1 := parseTime(gotTime(got), ctx.location)
-		right, ok2 := parseTime(p.vals[0], ctx.location)
+		right, ok2 := parseTime(vals[0], ctx.location)
 		if !ok1 || !ok2 {
 			return false
 		}
@@ -153,6 +160,37 @@ func (p pred) match(ctx evalCtx, iss *model.Issue) bool {
 		}
 	}
 	return false
+}
+
+// fnValPrefix marks a value lexed as a function call (openSprints() & co).
+// Real JQL values cannot contain NUL, so it cannot collide with one.
+const fnValPrefix = "\x00fn:"
+
+// sprintFnStates maps the JQL sprint functions to the sprint state they
+// ask the store for. openSprints() is active-only — closed sprints are
+// closedSprints()'s job.
+var sprintFnStates = map[string]string{
+	"opensprints":   model.SprintActive,
+	"futuresprints": model.SprintFuture,
+	"closedsprints": model.SprintClosed,
+}
+
+// expandFns replaces function-marked values with the sprint ids they
+// resolve to at match time (sprint state is live: a sprint closed after
+// parse must leave openSprints()). Plain values pass through untouched.
+func (p pred) expandFns(ctx evalCtx) []string {
+	out := make([]string, 0, len(p.vals))
+	for _, v := range p.vals {
+		name := strings.TrimPrefix(v, fnValPrefix)
+		if name == v { // no marker
+			out = append(out, v)
+			continue
+		}
+		if ctx.sprintIDsByState != nil {
+			out = append(out, ctx.sprintIDsByState(sprintFnStates[name])...)
+		}
+	}
+	return out
 }
 
 func (p pred) values(ctx evalCtx, iss *model.Issue) []string {
@@ -189,6 +227,19 @@ func (p pred) values(ctx evalCtx, iss *model.Issue) []string {
 		return namedVals(iss.FixVersions)
 	case "component", "components":
 		return namedVals(iss.Components)
+	case "sprint":
+		// Membership is the current sprint only (SprintIDs tail) — the
+		// Cloud simplification, documented in docs/COMPATIBILITY.md. An
+		// issue in no sprint carries the empty value so is EMPTY works.
+		if n := len(iss.SprintIDs); n > 0 {
+			id := iss.SprintIDs[n-1]
+			name := ""
+			if ctx.sprintNameOf != nil {
+				name = ctx.sprintNameOf(id)
+			}
+			return []string{strconv.FormatInt(id, 10), name, strings.ToLower(name)}
+		}
+		return []string{""}
 	}
 	return nil
 }
@@ -360,6 +411,15 @@ func makeCtx(look Lookup) evalCtx {
 			}
 			return nil
 		},
+		sprintNameOf: func(id int64) string {
+			if look.Sprint != nil {
+				if sp := look.Sprint(id); sp != nil {
+					return sp.Name
+				}
+			}
+			return ""
+		},
+		sprintIDsByState: look.SprintIDsByState,
 	}
 }
 
@@ -690,6 +750,9 @@ func (p *parser) parsePred() (node, error) {
 		if err != nil {
 			return nil, err
 		}
+		if err := fnCheck(field, vals); err != nil {
+			return nil, err
+		}
 		return pred{field: field, op: opNin, vals: vals}, nil
 	}
 	if p.takeIdent("in") {
@@ -697,7 +760,22 @@ func (p *parser) parsePred() (node, error) {
 		if err != nil {
 			return nil, err
 		}
+		if err := fnCheck(field, vals); err != nil {
+			return nil, err
+		}
 		return pred{field: field, op: opIn, vals: vals}, nil
+	}
+	// is [not] EMPTY / NULL — Jira's null test, on any searchable field.
+	if p.takeIdent("is") {
+		neg := p.takeIdent("not")
+		t := p.next()
+		if t.kind != kIdent || (t.val != "" && !strings.EqualFold(t.val, "empty") && !strings.EqualFold(t.val, "null")) {
+			return nil, fmt.Errorf("jql: expected EMPTY or NULL after IS")
+		}
+		if neg {
+			return pred{field: field, op: opNeq, vals: []string{""}}, nil
+		}
+		return pred{field: field, op: opEq, vals: []string{""}}, nil
 	}
 	op := p.next()
 	var c cmpOp
@@ -721,7 +799,25 @@ func (p *parser) parsePred() (node, error) {
 	if err != nil {
 		return nil, err
 	}
+	if err := fnCheck(field, []string{val}); err != nil {
+		return nil, err
+	}
 	return pred{field: field, op: c, vals: []string{val}}, nil
+}
+
+// fnCheck rejects a sprint function value on any field but sprint. It is
+// parsed as a marked value, so elsewhere it could never equal a real value:
+// `=` would silently match nothing and `!=` everything.
+func fnCheck(field string, vals []string) error {
+	if field == "sprint" {
+		return nil
+	}
+	for _, v := range vals {
+		if name := strings.TrimPrefix(v, fnValPrefix); name != v {
+			return fmt.Errorf("jql: %s() is only valid with the sprint field", name)
+		}
+	}
+	return nil
 }
 
 func (p *parser) listOrVal() ([]string, error) {
@@ -759,9 +855,28 @@ func (p *parser) listOrVal() ([]string, error) {
 func (p *parser) value() (string, error) {
 	t := p.next()
 	switch t.kind {
-	case kString, kIdent:
+	case kString:
 		if strings.EqualFold(t.val, "empty") || strings.EqualFold(t.val, "null") {
 			return "", nil
+		}
+		return t.val, nil
+	case kIdent:
+		if strings.EqualFold(t.val, "empty") || strings.EqualFold(t.val, "null") {
+			return "", nil
+		}
+		// A value function — openSprints() & co. Zero arguments only; the
+		// known-name check is here so the error names the call site's word.
+		if p.peek().kind == kLParen {
+			name := strings.ToLower(t.val)
+			if _, ok := sprintFnStates[name]; !ok {
+				return "", fmt.Errorf("jql: a function with name '%s' does not exist", t.val)
+			}
+			p.next()
+			if p.peek().kind != kRParen {
+				return "", fmt.Errorf("jql: %s() takes no arguments", t.val)
+			}
+			p.next()
+			return fnValPrefix + name, nil
 		}
 		return t.val, nil
 	default:

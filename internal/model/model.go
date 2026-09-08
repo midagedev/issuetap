@@ -274,12 +274,15 @@ type FieldOption struct {
 	Value string `json:"value"`
 }
 
-// FieldSchema is the Jira field schema fragment.
+// FieldSchema is the Jira field schema fragment. CustomID is the numeric
+// half of a custom field (customfield_10020 → 10020) that Jira Software
+// fields carry and plain custom fields do not.
 type FieldSchema struct {
-	Type   string `json:"type,omitempty"`
-	Items  string `json:"items,omitempty"`
-	Custom string `json:"custom,omitempty"`
-	System string `json:"system,omitempty"`
+	Type     string `json:"type,omitempty"`
+	Items    string `json:"items,omitempty"`
+	Custom   string `json:"custom,omitempty"`
+	System   string `json:"system,omitempty"`
+	CustomID int    `json:"customId,omitempty"`
 }
 
 // Filter is a saved JQL filter (GET /filter/my).
@@ -336,9 +339,46 @@ type Issue struct {
 	// RemoteLinks are Jira remote issue links (gadak GDK-1032): pointers
 	// at things outside this tracker, upserted by globalId.
 	RemoteLinks []RemoteLink
-	Links       []IssueLink
-	Histories   []History
-	Custom      map[string]any
+	// SprintIDs is every sprint the issue has been in, oldest first —
+	// the order customfield_10020 serves. The last element is the current
+	// sprint (JQL membership); empty means backlog / never sprinted.
+	// Cleared wholesale by a move to the backlog.
+	SprintIDs []int64
+	Links     []IssueLink
+	Histories []History
+	Custom    map[string]any
+}
+
+// Board is one Jira Software scrum board. Issuetap keeps exactly one per
+// project, created lazily by the Agile API (docs/decisions/0002) — there
+// is no board authoring anywhere else.
+type Board struct {
+	ID         int64
+	Name       string
+	Type       string // "scrum"
+	ProjectKey string
+}
+
+// Sprint states, as the Agile API spells them (lowercase on the wire).
+const (
+	SprintFuture = "future"
+	SprintActive = "active"
+	SprintClosed = "closed"
+)
+
+// Sprint is one sprint on a board. Dates are Cloud timestamp strings;
+// absent stays absent — the API omits unset dates rather than inventing
+// them, and activatedDate/completeDate are stamped by the store clock.
+type Sprint struct {
+	ID            int64
+	Name          string
+	Goal          string
+	State         string // future | active | closed
+	BoardID       int64
+	StartDate     string
+	EndDate       string
+	CompleteDate  string
+	ActivatedDate string
 }
 
 // Space is a Confluence space.

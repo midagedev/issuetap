@@ -20,6 +20,13 @@ package store
 //     same moment; the loser sees 2 and stops.
 //   - `attachments` is emptied, not dropped, so a migrated file and a fresh
 //     one have the same schema text. VACUUM afterwards returns the space.
+//
+// v2 → v3 is the other shape a migration can be: pure DDL (agileSchema,
+// for the boards/sprints tables — gadak GDK-1666). Nothing is moved or
+// dropped, so there is no VACUUM INTO backup: SQLite DDL is transactional,
+// a failure rolls the CREATEs back and leaves a v2 file untouched, and
+// re-running after an unclean exit is idempotent (the version re-check
+// stops a loser whose tables already exist).
 
 import (
 	"bytes"
@@ -42,6 +49,11 @@ func migratePersist(db *sql.DB, path string, have int, blobDir string) error {
 	if have < 2 {
 		if err := migrateV1toV2(db, path, blobDir); err != nil {
 			return fmt.Errorf("persist %s: migrate to schema_version 2: %w", path, err)
+		}
+	}
+	if have < 3 {
+		if err := migrateV2toV3(db, path); err != nil {
+			return fmt.Errorf("persist %s: migrate to schema_version 3: %w", path, err)
 		}
 	}
 	return nil
@@ -198,6 +210,35 @@ func migrateV1toV2(db *sql.DB, path, blobDir string) error {
 			len(truncated), strings.Join(truncated, ", "))
 	}
 	return nil
+}
+
+// migrateV2toV3 adds the agile tables (boards, sprints) to a v2 persist.
+// Same BEGIN IMMEDIATE + in-tx version re-read as v1 → v2 — the persist is
+// shared, and the loser of a simultaneous upgrade must stop, not error on
+// "table boards already exists".
+func migrateV2toV3(db *sql.DB, path string) error {
+	var have int
+	if err := db.QueryRow(`PRAGMA user_version`).Scan(&have); err == nil && have >= 3 {
+		return nil
+	}
+	tx, err := db.Begin() // _txlock=immediate: this is BEGIN IMMEDIATE
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if err := tx.QueryRow(`PRAGMA user_version`).Scan(&have); err != nil {
+		return err
+	}
+	if have >= 3 {
+		return nil // another process got here first
+	}
+	if _, err := tx.Exec(agileSchema); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`PRAGMA user_version = 3`); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 // attachmentMetaFromIssues reads filename/mime/media for every attachment

@@ -51,8 +51,15 @@ func (s *Server) handleAdmin(w http.ResponseWriter, r *http.Request) {
 // one on another machine talking to this origin over a paired serve —
 // cannot measure them itself; this is where it asks.
 func (s *Server) apiStorage(w http.ResponseWriter, r *http.Request) {
+	st, err := s.st.AttachmentStorage()
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{
+			"error": "attachment storage: " + err.Error(),
+		})
+		return
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"attachments":    s.st.AttachmentStorage(),
+		"attachments":    st,
 		"maxUploadBytes": s.cfg.AttachmentCap(),
 	})
 }

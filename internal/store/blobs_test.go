@@ -55,7 +55,10 @@ func TestAttachmentStorageAggregates(t *testing.T) {
 	if err := st.Apply(doc); err != nil {
 		t.Fatal(err)
 	}
-	base := st.AttachmentStorage()
+	base, err := st.AttachmentStorage()
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	same := bytes.Repeat([]byte{'a'}, 4096)
 	other := bytes.Repeat([]byte{'b'}, 100)
@@ -64,7 +67,10 @@ func TestAttachmentStorageAggregates(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	got := st.AttachmentStorage()
+	got, err := st.AttachmentStorage()
+	if err != nil {
+		t.Fatal(err)
+	}
 	if got.Attachments != base.Attachments+3 {
 		t.Errorf("attachments %d, want %d", got.Attachments, base.Attachments+3)
 	}

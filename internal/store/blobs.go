@@ -291,7 +291,12 @@ type AttachmentStorage struct {
 
 // AttachmentStorage reports the byte-side totals. Distinct-sha counting is
 // why Files can be less than Attachments: the store is content-addressed.
-func (s *Store) AttachmentStorage() AttachmentStorage {
+//
+// An error is returned, never swallowed into a zeroed struct: "0 bytes" and
+// "the question could not be answered" are different answers, and a panel
+// that shows the first when it means the second is worse than one that
+// shows nothing.
+func (s *Store) AttachmentStorage() (AttachmentStorage, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	var out AttachmentStorage
@@ -302,10 +307,10 @@ SELECT COUNT(*), COUNT(DISTINCT sha256), SUM(size), MAX(size), MIN(NULLIF(create
 FROM attachment_blobs WHERE deleted_at=''`).
 		Scan(&out.Attachments, &out.Files, &total, &largest, &oldest, &newest)
 	if err != nil {
-		return AttachmentStorage{}
+		return AttachmentStorage{}, err
 	}
 	out.Bytes, out.LargestSize = total.Int64, largest.Int64
 	out.OldestAt, out.NewestAt = oldest.String, newest.String
 	out.Deleted = s.sqlCount(`SELECT COUNT(*) FROM attachment_blobs WHERE deleted_at<>''`)
-	return out
+	return out, nil
 }

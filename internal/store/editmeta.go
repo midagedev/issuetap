@@ -374,8 +374,6 @@ func fixtureFieldsFromStore(fields []model.FieldInfo) []fixtures.Field {
 	return out
 }
 
-
-
 // validateCustomWriteLocked gates the Custom namespace: only a registered
 // custom field may enter. An unregistered id — or a system id outside the
 // UpdateIssue/CreateIssue switches — is Cloud's screen/unknown 400, never a

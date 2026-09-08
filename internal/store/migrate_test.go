@@ -198,9 +198,13 @@ func TestFailedMigrationLeavesV1IntactAndRetrySucceeds(t *testing.T) {
 }
 
 // One persist is shared by every process that opened it (gadak GDK-1180),
-// so two can reach v1 at the same moment. Both must end up working, and
-// the file must be migrated once.
-func TestConcurrentOpensMigrateOnce(t *testing.T) {
+// so two can reach v1 at the same moment. Both must end up working. This
+// says nothing about how many times the bytes were written — content
+// addressing makes a second write land on the same file — and everything
+// about neither open being corrupted by the other. Two real races came
+// out of it: a shared VACUUM INTO target, and the tmp sweep deleting the
+// other process's in-flight upload.
+func TestConcurrentOpensBothSucceed(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "issuetap.db")
 	body := []byte("two processes, one file")

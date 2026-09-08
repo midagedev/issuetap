@@ -4,8 +4,8 @@ import (
 	"testing"
 
 	"github.com/midagedev/issuetap/internal/fixtures"
-	"github.com/midagedev/issuetap/internal/model"
 	"github.com/midagedev/issuetap/internal/locale"
+	"github.com/midagedev/issuetap/internal/model"
 )
 
 func loadTiny(t *testing.T) *Store {

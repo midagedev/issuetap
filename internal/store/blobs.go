@@ -192,10 +192,12 @@ func (d dirBlobs) stage(r io.Reader, max int64) (st staged, err error) {
 		return staged{}, fmt.Errorf("blobs: %w", err)
 	}
 	if err = os.Rename(tmp, dst); err != nil {
-		// POSIX replaces an existing target silently; Windows refuses.
-		// Two uploads of identical bytes race here legitimately, and the
-		// target's name is its own checksum — an existing file of the
-		// right size IS this content.
+		// Defensive: Go's os.Rename replaces an existing target on every
+		// platform (Windows goes through MoveFileEx with
+		// MOVEFILE_REPLACE_EXISTING), so this should not fire. If some
+		// filesystem does refuse, the target's name is its own checksum —
+		// an existing file of the right size IS this content, and two
+		// uploads of identical bytes race here legitimately.
 		if fi, statErr := os.Stat(dst); statErr == nil && fi.Size() == n {
 			_ = os.Remove(tmp)
 			err = nil

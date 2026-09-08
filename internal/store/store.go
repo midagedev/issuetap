@@ -873,8 +873,9 @@ func (s *Store) makeAttach(a fixtures.Attachment, fallback string) (model.Attach
 		body = []byte("issuetap fixture attachment " + a.Filename)
 	}
 	media := uuid5(id)
+	st := s.stageBytesLocked(body)
 	s.putBlobLocked(blobRef{ID: id, MediaID: media, Filename: a.Filename, MimeType: mime,
-		SHA: hashOf(body), Size: int64(len(body))}, s.stageBytesLocked(body))
+		SHA: st.sha, Size: st.size}, st)
 	return model.Attachment{
 		ID: id, Filename: a.Filename, MimeType: mime, Size: int64(len(body)),
 		Author: *s.userOrDefault(a.Author), Created: first(a.Created, fallback),

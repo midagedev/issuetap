@@ -31,29 +31,31 @@ keys on `"High"` fails here even when a particular real site would not.
 That is the product: make the trap fail loudly. `examples/fixtures/korean.yaml`
 uses Korean priority names for the same reason.
 
-## Two roles, one catalog (gadak GDK-597)
+## One language for every catalog (gadak GDK-597, GDK-1596)
 
-The priority deviation above belongs to the **serve role**: `issuetap
-serve --locale ko` is a name-trap harness, and a trap that spares
+The priority deviation above applies to **both roles** since 2026-09-08.
+`issuetap serve --locale ko` is a name-trap harness, and a trap that spares
 priorities would stop failing loudly. The **embedded role** (the public
-`issuetap.NewEmbedded` surface) is not a harness — a standalone workspace
-is someone's real tracker, and a real tracker serves what the site serves.
-The live ko_KR site kept priority names English, so the embedded role does
-too:
+`issuetap.NewEmbedded` surface) used to pin priority names to English —
+"a real tracker serves what the live ko_KR site served". Measured on
+gadak's own Korean hero clip, that fidelity read as a translation miss:
+`우선순위 Medium` inside a panel where every other name was Korean. A
+self-hosted tracker owes its user their language, not Atlassian's
+untranslated admin defaults, so the embedded role now follows the locale
+for priorities too:
 
 | | status / type / field names | priority names |
 | --- | --- | --- |
 | `serve --locale ko` | Korean | Korean (the trap) |
-| `NewEmbedded` + locale ko | Korean | **English** (Cloud fidelity) |
+| `NewEmbedded` + locale ko | Korean | Korean |
 
-The split has one owner: `store.Options.PriorityNamesEnglish` →
-`Store.prioLoc`, which every priority overlay call site reads
-(`Store.Priorities`, `Store.Priority`, the JQL `Lookup`). `EmbeddedConfig`
-defaults to fidelity — an embedder opts back into the trap with
-`PriorityLocaleTrap: true`. `Embedded.SetLocale` changes the overlay
-locale of a live store (a config change must not drop the persist lock);
-the priority role is fixed at open. Same axis as `WallClock` (GDK-369):
-the embedded role gets the real-tracker behavior, not the demo one.
+The locale has one owner: `store.Options.Locale` → `Store.loc`, read by
+every overlay call site (`Store.Priorities`, `Store.Priority`, the JQL
+`Lookup`, the status and type accessors). `Embedded.SetLocale` changes it
+on a live store (a config change must not drop the persist lock) and every
+catalog follows at once. A client that keys on `"High"` still fails on a
+ko workspace — the trap the serve role always set is now the embedded
+behavior as well, and the fix is the same: key on `priority.id`.
 
 `--type Task` against a Korean site fails because the type is called `작업`.
 Key on `issue_type_id` or `issuetype = 10003`.

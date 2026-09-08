@@ -43,11 +43,6 @@ type Store struct {
 	tz        *time.Location
 	tzName    string // fixture/persist timezone string; restored from store_meta
 
-	// prioNamesEnglish is the embedded-role flag: a standalone workspace
-	// is a real tracker, so priority names stay English under every
-	// locale — what a live Cloud site does (gadak GDK-597).
-	prioNamesEnglish bool
-
 	// Sequence counters live in the working copy (store_meta "seq:*"
 	// rows, nextSeqLocked), not in process memory: the persist is one
 	// working copy shared by every process that opened it, and counters
@@ -74,13 +69,6 @@ type Options struct {
 	// instead of the deterministic seed clock — for a standalone workspace
 	// that is a real tracker, not a fixture-driven demo (gadak GDK-369).
 	WallClock bool
-	// PriorityNamesEnglish pins priority names to the English catalog under
-	// every locale — what a live Cloud site does: the ko_KR site in
-	// docs/LOCALES.md still returned Highest/High/… (gadak GDK-597). For a
-	// standalone workspace that is a real tracker, not a name-trap harness.
-	// Zero keeps the `serve --locale` deviation — localized priority names —
-	// which exists to fail name-keyed clients loudly; see prioLoc.
-	PriorityNamesEnglish bool
 }
 
 // DefaultPersistDebounce is retained for API compatibility. PersistDebounce
@@ -122,12 +110,11 @@ func openStore(opt Options) (*Store, error) {
 		clk = clock.NewWall()
 	}
 	s := &Store{
-		seed:             opt.Seed,
-		clk:              clk,
-		wallClock:        opt.WallClock,
-		loc:              opt.Locale,
-		prioNamesEnglish: opt.PriorityNamesEnglish,
-		tz:               time.FixedZone("KST", 9*3600),
+		seed:      opt.Seed,
+		clk:       clk,
+		wallClock: opt.WallClock,
+		loc:       opt.Locale,
+		tz:        time.FixedZone("KST", 9*3600),
 	}
 	if opt.PersistPath == "" {
 		s.db = openWorkingDB()
@@ -1228,20 +1215,6 @@ func first(ss ...string) string {
 	return ""
 }
 
-// prioLoc is the one owner of the serve-vs-embedded priority-locale split.
-// A standalone workspace is a real tracker, and the live ko_KR site kept
-// priority names English (docs/LOCALES.md) — so the embedded role pins
-// priorities to the EN catalog under every locale. `issuetap serve
-// --locale` keeps translating them; that name trap is the product of the
-// serve role (gadak GDK-597). Callers must hold s.mu (or neither lock —
-// the field is immutable after New).
-func (s *Store) prioLoc() locale.Code {
-	if s.prioNamesEnglish {
-		return locale.EN
-	}
-	return s.loc
-}
-
 // Lookup is the JQL resolver.
 func (s *Store) Lookup() jql.Lookup {
 	return jql.Lookup{
@@ -1261,7 +1234,7 @@ func (s *Store) Lookup() jql.Lookup {
 		},
 		Priority: func(id string) *model.Priority {
 			if p := s.priorityByIDLocked(id); p != nil {
-				cp := locale.OverlayPriority(s.prioLoc(), *p)
+				cp := locale.OverlayPriority(s.loc, *p)
 				return &cp
 			}
 			return nil
@@ -1739,7 +1712,7 @@ func (s *Store) Priorities() []model.Priority {
 	list := s.prioritiesLocked()
 	out := make([]model.Priority, 0, len(list))
 	for _, p := range list {
-		out = append(out, locale.OverlayPriority(s.prioLoc(), *p))
+		out = append(out, locale.OverlayPriority(s.loc, *p))
 	}
 	return out
 }
@@ -1752,7 +1725,7 @@ func (s *Store) Priority(id string) *model.Priority {
 	if p == nil {
 		return nil
 	}
-	cp := locale.OverlayPriority(s.prioLoc(), *p)
+	cp := locale.OverlayPriority(s.loc, *p)
 	return &cp
 }
 

@@ -87,10 +87,10 @@ func (s *Server) typeJSON(t model.IssueType) map[string]any {
 
 func (s *Server) priorityJSON(p model.Priority) map[string]any {
 	// No overlay here: every priority this renders already came from a
-	// store accessor, and the store is the single owner of the priority
-	// locale (Store.prioLoc — serve trap vs embedded Cloud fidelity,
-	// gadak GDK-597). Re-overlaying here would translate an
-	// English-pinned name back.
+	// store accessor, and the store is the single owner of the catalog
+	// locale (Store.loc — one language for status, type and priority
+	// names, gadak GDK-597 / GDK-1596). Re-overlaying here would
+	// double-translate.
 	out := map[string]any{"id": p.ID, "name": p.Name}
 	if p.StatusColor != "" {
 		out["statusColor"] = p.StatusColor

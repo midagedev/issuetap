@@ -178,12 +178,14 @@ func namesOf(t *testing.T, body []byte) map[string]string {
 	return out
 }
 
-// TestEmbeddedLocaleCloudFidelity (gadak GDK-597): the embedded role is a
-// real tracker, so a ko workspace serves what the live ko_KR site served —
-// Korean status and issue-type names, English priority names. The serve
-// role's priority trap (localized priorities) stays available to an
-// embedder via PriorityLocaleTrap.
-func TestEmbeddedLocaleCloudFidelity(t *testing.T) {
+// TestEmbeddedLocaleOneLanguage (gadak GDK-597, GDK-1596): a ko workspace
+// serves every catalog in Korean — status, issue type and priority names
+// alike. Until 2026-09-08 the embedded role pinned priority names to
+// English on the grounds that a live ko_KR Cloud site does; measured on
+// gadak's own ko hero clip, `우선순위 Medium` inside an otherwise Korean
+// panel reads as a translation miss, and a self-hosted tracker owes its
+// user their language, not Atlassian's admin defaults.
+func TestEmbeddedLocaleOneLanguage(t *testing.T) {
 	e, err := issuetap.NewEmbedded(issuetap.EmbeddedConfig{Locale: "ko"})
 	if err != nil {
 		t.Fatal(err)
@@ -202,30 +204,14 @@ func TestEmbeddedLocaleCloudFidelity(t *testing.T) {
 	if code != http.StatusOK {
 		t.Fatalf("GET /priority: %d: %s", code, body)
 	}
-	prios := namesOf(t, body)
-	if got := prios["2"]; got != "High" {
-		t.Fatalf("ko priority 2 = %q — Cloud fidelity keeps priority names English", got)
-	}
-
-	// The trap opt-in restores the serve behavior.
-	trap, err := issuetap.NewEmbedded(issuetap.EmbeddedConfig{Locale: "ko", PriorityLocaleTrap: true})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer trap.Close()
-	code, body = authReq(t, trap, http.MethodGet, "/rest/api/3/priority", nil, "")
-	if code != http.StatusOK {
-		t.Fatalf("GET /priority (trap): %d: %s", code, body)
-	}
 	if got := namesOf(t, body)["2"]; got != "높음" {
-		t.Fatalf("trap priority 2 = %q — the serve trap must stay reachable", got)
+		t.Fatalf("ko priority 2 = %q — priority names follow the workspace locale like statuses do", got)
 	}
 }
 
 // TestEmbeddedSetLocaleRuntime (gadak GDK-597): a config change reaches a
 // live embedded store without dropping the persist lock — the gadak-serve
-// path. Status names follow; priority names stay English (the role is
-// fixed at open).
+// path. Status and priority names both follow the new locale.
 func TestEmbeddedSetLocaleRuntime(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "state.yaml")
 	e, err := issuetap.NewEmbedded(issuetap.EmbeddedConfig{PersistPath: path})
@@ -256,8 +242,8 @@ func TestEmbeddedSetLocaleRuntime(t *testing.T) {
 	if code != http.StatusOK {
 		t.Fatalf("GET /priority after SetLocale: %d: %s", code, body)
 	}
-	if got := namesOf(t, body)["2"]; got != "High" {
-		t.Fatalf("priority 2 after SetLocale(ko) = %q — role must not follow the runtime locale", got)
+	if got := namesOf(t, body)["2"]; got != "높음" {
+		t.Fatalf("priority 2 after SetLocale(ko) = %q — priorities follow the runtime locale too", got)
 	}
 
 	// The locale change persists like any other mutation.

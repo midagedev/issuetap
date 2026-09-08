@@ -42,12 +42,6 @@ type EmbeddedConfig struct {
 	PersistPath     string        // on-disk SQLite state file (see store.Options)
 	PersistDebounce time.Duration // retained; no-op (writes commit before return)
 	WallClock       bool          // stamp records with wall time, not the seed clock (see store.Options)
-	// PriorityLocaleTrap opts back into the `serve --locale` deviation:
-	// localized priority names. Zero is the embedded role — a real tracker
-	// serving what a live Cloud site serves, where priority names stay
-	// English under every locale (docs/LOCALES.md, gadak GDK-597; see
-	// store.Options.PriorityNamesEnglish).
-	PriorityLocaleTrap bool
 }
 
 // Embedded is issuetap as an in-process dependency: the public embedding
@@ -89,9 +83,6 @@ func NewEmbedded(cfg EmbeddedConfig) (*Embedded, error) {
 		Seed: seed, Locale: loc,
 		PersistPath: cfg.PersistPath, PersistDebounce: cfg.PersistDebounce,
 		WallClock: cfg.WallClock,
-		// The embedded default is Cloud fidelity: only an explicit trap
-		// opt-in restores the serve deviation (gadak GDK-597).
-		PriorityNamesEnglish: !cfg.PriorityLocaleTrap,
 	})
 	if err != nil {
 		return nil, err

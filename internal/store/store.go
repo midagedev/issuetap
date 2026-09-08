@@ -2196,6 +2196,25 @@ func parseADF(raw json.RawMessage) (json.RawMessage, string, error) {
 	return obj, adf.Plain(obj), nil
 }
 
+// Attachment returns an attachment's metadata and nothing else. Both Jira
+// attachment routes want only this, and reaching it through
+// AttachmentBytes read the whole file to throw it away — measured: a
+// 200 MiB download peaked at 457 MB RSS with the bytes never used
+// (GDK-1617).
+func (s *Store) Attachment(id string) *model.Attachment {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	for _, iss := range s.allIssuesLocked() {
+		for i := range iss.Attachments {
+			if iss.Attachments[i].ID == id {
+				a := iss.Attachments[i]
+				return &a
+			}
+		}
+	}
+	return nil
+}
+
 // AttachmentBytes returns stored bytes.
 func (s *Store) AttachmentBytes(id string) ([]byte, *model.Attachment) {
 	s.mu.RLock()

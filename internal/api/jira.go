@@ -1098,7 +1098,7 @@ func (s *Server) postAttachment(w http.ResponseWriter, r *http.Request, key stri
 
 func (s *Server) getAttachment(w http.ResponseWriter, r *http.Request, id string) {
 	id = strings.Trim(id, "/")
-	_, a := s.st.AttachmentBytes(id)
+	a := s.st.Attachment(id)
 	if a == nil {
 		writeJiraError(w, http.StatusNotFound, "Attachment not found")
 		return
@@ -1108,7 +1108,7 @@ func (s *Server) getAttachment(w http.ResponseWriter, r *http.Request, id string
 
 func (s *Server) getAttachmentContent(w http.ResponseWriter, r *http.Request, id string) {
 	id = strings.Trim(id, "/")
-	_, a := s.st.AttachmentBytes(id)
+	a := s.st.Attachment(id)
 	if a == nil {
 		writeJiraError(w, http.StatusNotFound, "Attachment not found")
 		return

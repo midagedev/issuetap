@@ -3,6 +3,7 @@ package api
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log"
 	"mime"
@@ -1067,9 +1068,22 @@ func (s *Server) postAttachment(w http.ResponseWriter, r *http.Request, key stri
 		if part.FormName() != "file" {
 			continue
 		}
-		b, err := io.ReadAll(io.LimitReader(part, 8<<20))
+		// Read one byte past the cap so a file at the boundary is told
+		// apart from one over it. io.ReadAll(io.LimitReader(...)) stops at
+		// the limit with no error, so the old pair stored the first
+		// maxAttachmentBytes of a larger file and answered 200 — silent,
+		// unrecoverable truncation, because this store holds the only copy
+		// (gadak GDK-1614: 12,582,912 in, 8,388,608 stored, success
+		// reported). Refuse instead; the cap is a separate question from
+		// how the bytes are stored.
+		b, err := io.ReadAll(io.LimitReader(part, maxAttachmentBytes+1))
 		if err != nil {
 			writeJiraError(w, http.StatusBadRequest, "Unable to read file")
+			return
+		}
+		if int64(len(b)) > maxAttachmentBytes {
+			writeJiraError(w, http.StatusRequestEntityTooLarge,
+				fmt.Sprintf("Attachment is larger than the %d MiB limit", maxAttachmentBytes>>20))
 			return
 		}
 		a, err := s.st.AddAttachment(key, part.FileName(), part.Header.Get("Content-Type"), s.identity(r).AccountID, b)
@@ -1085,6 +1099,12 @@ func (s *Server) postAttachment(w http.ResponseWriter, r *http.Request, key stri
 	}
 	writeJSON(w, http.StatusOK, created)
 }
+
+// maxAttachmentBytes is the largest attachment this origin accepts. The
+// upload is buffered whole (the store keeps bytes as a BLOB), so the cap is
+// a memory bound, not a policy. Over it is a 413 — never a truncation
+// (gadak GDK-1614).
+const maxAttachmentBytes int64 = 8 << 20
 
 func (s *Server) getAttachment(w http.ResponseWriter, r *http.Request, id string) {
 	id = strings.Trim(id, "/")

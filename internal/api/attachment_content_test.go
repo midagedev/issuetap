@@ -2,6 +2,7 @@ package api_test
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"fmt"
 	"io"
 	"mime/multipart"
@@ -191,15 +192,46 @@ func TestAttachmentContentSupportsRangeAndETag(t *testing.T) {
 		t.Errorf("Content-Length = %q, want 20", got)
 	}
 
-	// A range request must answer 206 with exactly those bytes.
-	part := authGetRange(t, ts, "/rest/api/3/attachment/content/70001", "bytes=5-9")
+	// The bytes handed back are the bytes handed in — hashed, not eyeballed
+	// (gadak GDK-1616 contract 2).
+	gotFull, _ := io.ReadAll(full.Body)
+	if got, want := sha256.Sum256(gotFull), sha256.Sum256(payload); got != want {
+		t.Errorf("download hash %x != upload hash %x", got, want)
+	}
+
+	// A range request must answer 206 with exactly those bytes, and say
+	// which bytes they were: a player that cannot read Content-Range
+	// cannot seek even when the body is right.
+	part := authGetRange(t, ts, "/rest/api/3/attachment/content/70001", "bytes=0-99")
 	defer part.Body.Close()
 	if part.StatusCode != http.StatusPartialContent {
 		t.Fatalf("range status %d, want 206", part.StatusCode)
 	}
-	gotPart, _ := io.ReadAll(part.Body)
+	if got, want := part.Header.Get("Content-Range"), "bytes 0-19/20"; got != want {
+		// A range past the end is satisfied by what exists: 20 bytes.
+		t.Errorf("Content-Range = %q, want %q", got, want)
+	}
+	mid := authGetRange(t, ts, "/rest/api/3/attachment/content/70001", "bytes=5-9")
+	defer mid.Body.Close()
+	if mid.StatusCode != http.StatusPartialContent {
+		t.Fatalf("range status %d, want 206", mid.StatusCode)
+	}
+	if got, want := mid.Header.Get("Content-Range"), "bytes 5-9/20"; got != want {
+		t.Errorf("Content-Range = %q, want %q", got, want)
+	}
+	gotPart, _ := io.ReadAll(mid.Body)
 	if string(gotPart) != "56789" {
 		t.Errorf("range body = %q, want %q", gotPart, "56789")
+	}
+
+	// A conditional request costs no bytes: 304, empty body.
+	cond := authGetIfNoneMatch(t, ts, "/rest/api/3/attachment/content/70001", etag)
+	defer cond.Body.Close()
+	if cond.StatusCode != http.StatusNotModified {
+		t.Fatalf("If-None-Match status %d, want 304 — every revalidation re-sends the file", cond.StatusCode)
+	}
+	if b, _ := io.ReadAll(cond.Body); len(b) != 0 {
+		t.Errorf("304 carried %d bytes of body", len(b))
 	}
 
 	// The bytes behind an id never change, so the ETag has to be stable.
@@ -208,6 +240,19 @@ func TestAttachmentContentSupportsRangeAndETag(t *testing.T) {
 	if got := again.Header.Get("ETag"); got != etag {
 		t.Errorf("ETag moved between two views: %q then %q", etag, got)
 	}
+}
+
+// authGetIfNoneMatch is authGet with a validator (GDK-1616).
+func authGetIfNoneMatch(t *testing.T, ts *httptest.Server, path, etag string) *http.Response {
+	t.Helper()
+	req, _ := http.NewRequest(http.MethodGet, ts.URL+path, nil)
+	req.SetBasicAuth("you@example.com", "issuetap")
+	req.Header.Set("If-None-Match", etag)
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return res
 }
 
 // authGetRange is authGet with a Range header (GDK-1616).

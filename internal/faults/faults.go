@@ -48,11 +48,11 @@ type Fault struct {
 
 // Hit is the result of applying the engine to one request.
 type Hit struct {
-	Fault     *Fault
-	Delay     time.Duration
-	Skip      bool // true → do not call the handler
-	Drift     bool
-	Truncate  int
+	Fault    *Fault
+	Delay    time.Duration
+	Skip     bool // true → do not call the handler
+	Drift    bool
+	Truncate int
 }
 
 // Engine is the live injector.

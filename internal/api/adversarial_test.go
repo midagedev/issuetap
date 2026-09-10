@@ -100,9 +100,9 @@ func TestSelfReviewUnknownFieldKeptInCustom(t *testing.T) {
 	defer ts.Close()
 	res := authPost(t, ts, "/rest/api/3/issue", map[string]any{
 		"fields": map[string]any{
-			"project":   map[string]any{"key": "TAP"},
-			"summary":   "custom field write",
-			"issuetype": map[string]any{"id": "10003"},
+			"project":           map[string]any{"key": "TAP"},
+			"summary":           "custom field write",
+			"issuetype":         map[string]any{"id": "10003"},
 			"customfield_10050": map[string]any{"value": "Sev1"},
 		},
 	})

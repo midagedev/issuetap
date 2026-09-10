@@ -72,8 +72,8 @@ func runOne(client *http.Client, base string, a Assertion) AssertionResult {
 	if resp.StatusCode != want {
 		return AssertionResult{
 			Name: name, Passed: false,
-			Got: fmt.Sprintf("status %d", resp.StatusCode),
-			Want: fmt.Sprintf("status %d", want),
+			Got:    fmt.Sprintf("status %d", resp.StatusCode),
+			Want:   fmt.Sprintf("status %d", want),
 			Detail: clip(string(raw), 300),
 		}
 	}

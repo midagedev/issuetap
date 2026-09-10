@@ -31,32 +31,32 @@ type Scenario struct {
 
 // Assertion is one HTTP check.
 type Assertion struct {
-	Name           string            `json:"name" yaml:"name"`
-	Method         string            `json:"method,omitempty" yaml:"method,omitempty"`
-	Path           string            `json:"path" yaml:"path"`
-	Body           any               `json:"body,omitempty" yaml:"body,omitempty"`
-	Headers        map[string]string `json:"headers,omitempty" yaml:"headers,omitempty"`
-	WantStatus     int               `json:"wantStatus,omitempty" yaml:"wantStatus,omitempty"`
-	WantContains   string            `json:"wantContains,omitempty" yaml:"wantContains,omitempty"`
-	WantJSONPath   string            `json:"wantJSONPath,omitempty" yaml:"wantJSONPath,omitempty"` // dotted, e.g. issuetap.code
-	WantJSONValue  string            `json:"wantJSONValue,omitempty" yaml:"wantJSONValue,omitempty"`
-	Auth           bool              `json:"auth,omitempty" yaml:"auth,omitempty"` // send Basic you@example.com:token
+	Name          string            `json:"name" yaml:"name"`
+	Method        string            `json:"method,omitempty" yaml:"method,omitempty"`
+	Path          string            `json:"path" yaml:"path"`
+	Body          any               `json:"body,omitempty" yaml:"body,omitempty"`
+	Headers       map[string]string `json:"headers,omitempty" yaml:"headers,omitempty"`
+	WantStatus    int               `json:"wantStatus,omitempty" yaml:"wantStatus,omitempty"`
+	WantContains  string            `json:"wantContains,omitempty" yaml:"wantContains,omitempty"`
+	WantJSONPath  string            `json:"wantJSONPath,omitempty" yaml:"wantJSONPath,omitempty"` // dotted, e.g. issuetap.code
+	WantJSONValue string            `json:"wantJSONValue,omitempty" yaml:"wantJSONValue,omitempty"`
+	Auth          bool              `json:"auth,omitempty" yaml:"auth,omitempty"` // send Basic you@example.com:token
 }
 
 // Report is the runner output.
 type Report struct {
-	Name    string           `json:"name"`
-	Passed  bool             `json:"passed"`
+	Name    string            `json:"name"`
+	Passed  bool              `json:"passed"`
 	Results []AssertionResult `json:"results"`
 }
 
 // AssertionResult is one check.
 type AssertionResult struct {
-	Name     string `json:"name"`
-	Passed   bool   `json:"passed"`
-	Got      string `json:"got,omitempty"`
-	Want     string `json:"want,omitempty"`
-	Detail   string `json:"detail,omitempty"`
+	Name   string `json:"name"`
+	Passed bool   `json:"passed"`
+	Got    string `json:"got,omitempty"`
+	Want   string `json:"want,omitempty"`
+	Detail string `json:"detail,omitempty"`
 }
 
 // Load reads a scenario file.

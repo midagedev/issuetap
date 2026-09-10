@@ -8,18 +8,18 @@ import (
 
 // Trace is one captured request.
 type Trace struct {
-	ID        int           `json:"id"`
-	At        time.Time     `json:"at"`
-	Method    string        `json:"method"`
-	Path      string        `json:"path"`
-	Query     string        `json:"query,omitempty"`
-	Dialect   string        `json:"dialect"`
-	Status    int           `json:"status"`
-	LatencyMS int64         `json:"latencyMs"`
-	Fault     string        `json:"fault,omitempty"`
-	Bytes     int           `json:"bytes"`
-	Request   string        `json:"request,omitempty"`
-	Response  string        `json:"response,omitempty"`
+	ID        int       `json:"id"`
+	At        time.Time `json:"at"`
+	Method    string    `json:"method"`
+	Path      string    `json:"path"`
+	Query     string    `json:"query,omitempty"`
+	Dialect   string    `json:"dialect"`
+	Status    int       `json:"status"`
+	LatencyMS int64     `json:"latencyMs"`
+	Fault     string    `json:"fault,omitempty"`
+	Bytes     int       `json:"bytes"`
+	Request   string    `json:"request,omitempty"`
+	Response  string    `json:"response,omitempty"`
 }
 
 // Log is a bounded ring of traces.

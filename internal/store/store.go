@@ -2919,6 +2919,12 @@ func (s *Store) UpdateFields(key string, fields map[string]any) error {
 // authorID is the acting user recorded on the changelog group; every
 // field the request actually changed gets one history item, a no-change
 // write gets none (gadak GDK-1208).
+//
+// GDK-1219: the whole request validates before anything is applied. A
+// throwaway decoded copy (the probe) takes the identical apply pass; an
+// error there leaves the live issue untouched — all-or-nothing, Cloud
+// semantics, structural instead of relying on the apply code happening
+// to never write mid-validation.
 func (s *Store) UpdateIssue(key string, fields, update map[string]any, authorID string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -2943,22 +2949,57 @@ func (s *Store) UpdateIssue(key string, fields, update map[string]any, authorID 
 		raw, disp := s.changeSnapshotLocked(iss, k)
 		before[k] = [2]string{raw, disp}
 	}
+	probe := s.issueByKeyLocked(key)
+	if err := s.applyFieldWritesLocked(probe, fields, update); err != nil {
+		return err
+	}
+	if err := s.applyFieldWritesLocked(iss, fields, update); err != nil {
+		// Unreachable in practice — the probe just ran the same pass over
+		// an identical copy and returned nil. Kept as a hard stop so a
+		// future divergence between the copies cannot half-apply.
+		return err
+	}
+	iss.Updated = clock.Format(s.clk.Tick())
+	var items []model.HistoryItem
+	for _, k := range touched {
+		raw, disp := s.changeSnapshotLocked(iss, k)
+		if b := before[k]; b[0] == raw && b[1] == disp {
+			continue
+		}
+		b := before[k]
+		items = append(items, model.HistoryItem{
+			Field: k, FieldID: k,
+			From: b[0], FromString: b[1],
+			To: raw, ToString: disp,
+		})
+	}
+	if len(items) > 0 {
+		s.appendHistoryLocked(iss, authorID, items)
+	}
+	s.putIssueLocked(iss)
+	return s.markDirtyLocked()
+}
+
+// applyFieldWritesLocked applies one PUT's update ops then fields to iss
+// and returns the first validation error, if any. It is the single owner
+// of every field's write validation — UpdateIssue runs it on the probe
+// copy first and on the live issue second, so a check added here exists
+// in both passes by construction. Iteration is in sorted key order so
+// the reported first error is deterministic for identical requests
+// (update ops first, Cloud's order; then fields alphabetically — which
+// also resolves issuetype before parent when both are present, so the
+// parent hierarchy check sees the requested type).
+func (s *Store) applyFieldWritesLocked(iss *model.Issue, fields, update map[string]any) error {
 	if err := s.applyUpdateOps(iss, update); err != nil {
 		return err
 	}
-	var parentKey *string
-	if raw, ok := fields["parent"]; ok {
-		childTypeID := iss.IssueTypeID
-		if id := pickID(fields["issuetype"]); id != "" {
-			childTypeID = id
-		}
-		k, err := s.resolveParentLocked(childTypeID, pickKey(raw))
-		if err != nil {
-			return parentFieldError(err, parentEditKeys)
-		}
-		parentKey = &k
+	keys := make([]string, 0, len(fields))
+	for k := range fields {
+		keys = append(keys, k)
 	}
-	for k, v := range fields {
+	sort.Strings(keys)
+	for _, k := range keys {
+		v := fields[k]
 		switch k {
 		case "summary":
 			if str, ok := v.(string); ok {
@@ -2969,13 +3010,25 @@ func (s *Store) UpdateIssue(key string, fields, update map[string]any, authorID 
 		case "labels":
 			iss.Labels = stringSlice(v)
 		case "priority":
-			iss.PriorityID = pickID(v)
-		case "issuetype":
-			iss.IssueTypeID = pickID(v)
-		case "parent":
-			if parentKey != nil {
-				iss.ParentKey = *parentKey
+			// A catalog field: an id nothing knows about is Cloud's 400,
+			// not a silently stored dangling reference (GDK-1219).
+			id, err := s.resolvePriorityRefLocked(v)
+			if err != nil {
+				return err
 			}
+			iss.PriorityID = id
+		case "issuetype":
+			id, err := s.resolveTypeRefLocked(v)
+			if err != nil {
+				return err
+			}
+			iss.IssueTypeID = id
+		case "parent":
+			k, err := s.resolveParentLocked(iss.IssueTypeID, pickKey(v))
+			if err != nil {
+				return parentFieldError(err, parentEditKeys)
+			}
+			iss.ParentKey = k
 		case "duedate":
 			if err := setDueDate(iss, v); err != nil {
 				return err
@@ -3006,25 +3059,45 @@ func (s *Store) UpdateIssue(key string, fields, update map[string]any, authorID 
 			iss.Custom[k] = v
 		}
 	}
-	iss.Updated = clock.Format(s.clk.Tick())
-	var items []model.HistoryItem
-	for _, k := range touched {
-		raw, disp := s.changeSnapshotLocked(iss, k)
-		if b := before[k]; b[0] == raw && b[1] == disp {
-			continue
+	return nil
+}
+
+// resolveTypeRefLocked resolves a client issuetype reference — {"id": …}
+// or {"name": …}, both Cloud-legal — to a catalog id. An unknown or empty
+// reference is "The issue type selected is invalid.", never a silently
+// stored dangling id (GDK-1219).
+func (s *Store) resolveTypeRefLocked(v any) (string, error) {
+	ref := pickID(v)
+	if ref != "" {
+		if t := s.typeByIDLocked(ref); t != nil {
+			return t.ID, nil
 		}
-		b := before[k]
-		items = append(items, model.HistoryItem{
-			Field: k, FieldID: k,
-			From: b[0], FromString: b[1],
-			To: raw, ToString: disp,
-		})
+		for _, t := range s.typesLocked() {
+			if strings.EqualFold(t.Name, ref) {
+				return t.ID, nil
+			}
+		}
 	}
-	if len(items) > 0 {
-		s.appendHistoryLocked(iss, authorID, items)
+	return "", FieldError{Field: "issuetype", Msg: "The issue type selected is invalid."}
+}
+
+// resolvePriorityRefLocked resolves a priority reference (id or name
+// form) to a catalog id. An empty reference clears the field — the
+// historical shape; an unknown one is a field error, not a dangling id.
+func (s *Store) resolvePriorityRefLocked(v any) (string, error) {
+	ref := pickID(v)
+	if ref == "" {
+		return "", nil
 	}
-	s.putIssueLocked(iss)
-	return s.markDirtyLocked()
+	if p := s.priorityByIDLocked(ref); p != nil {
+		return p.ID, nil
+	}
+	for _, p := range s.prioritiesLocked() {
+		if strings.EqualFold(p.Name, ref) {
+			return p.ID, nil
+		}
+	}
+	return "", FieldError{Field: "priority", Msg: "No priority could be found with id '" + ref + "'."}
 }
 
 // changeSnapshotLocked is one editable field reduced to a comparable
@@ -3083,7 +3156,15 @@ func (s *Store) applyUpdateOps(iss *model.Issue, update map[string]any) error {
 	if len(update) == 0 {
 		return nil
 	}
-	for field, raw := range update {
+	// Sorted so the first error is deterministic for identical requests
+	// (GDK-1219) — update ops as a group still run before fields.
+	fields := make([]string, 0, len(update))
+	for field := range update {
+		fields = append(fields, field)
+	}
+	sort.Strings(fields)
+	for _, field := range fields {
+		raw := update[field]
 		ops, ok := raw.([]any)
 		if !ok {
 			return fmt.Errorf("update.%s must be an array of operations", field)
@@ -3439,6 +3520,35 @@ func fixtureADF(doc json.RawMessage, text string) string {
 	return string(doc)
 }
 
+// resolveCreateTypeLocked is the single issuetype judgment for CreateIssue.
+// An explicit id must exist in the catalog — Cloud answers 400 "The issue
+// type selected is invalid." rather than filing under an id nothing can
+// render. When the field is omitted the default is catalog-derived, never
+// a magic number: "10003" when the catalog has it, else the lowest-id
+// level-0 type (the same id tie-break typeNameAtLevelLocked uses), else
+// there is nothing sane to file under and the caller gets the error.
+func (s *Store) resolveCreateTypeLocked(v any) (string, error) {
+	if pickID(v) != "" {
+		return s.resolveTypeRefLocked(v)
+	}
+	if s.typeByIDLocked("10003") != nil {
+		return "10003", nil
+	}
+	var best *model.IssueType
+	for _, t := range s.typesLocked() {
+		if t.HierarchyLevel != 0 {
+			continue
+		}
+		if best == nil || t.ID < best.ID {
+			best = t
+		}
+	}
+	if best == nil {
+		return "", FieldError{Field: "issuetype", Msg: "You must specify an issue type."}
+	}
+	return best.ID, nil
+}
+
 // CreateIssue files a new issue. fields is the Jira fields object;
 // reporterID is the acting user used when fields omits reporter (gadak
 // GDK-588 — an explicit fields.reporter always wins).
@@ -3454,9 +3564,15 @@ func (s *Store) CreateIssue(fields map[string]any, reporterID string) (*model.Is
 		return nil, FieldError{Field: "summary", Msg: "You must specify a summary of the issue."}
 	}
 	if s.projectByKeyLocked(project) == nil {
-		s.putProject(fixtures.Project{Key: project, Name: project})
+		// Cloud has no implicit project creation: naming an unknown key on
+		// create is a 400, not a new empty project (GDK-1211). Same message
+		// the GET /project/{key} 404 path uses.
+		return nil, FieldError{Field: "project", Msg: "No project could be found with key '" + project + "'."}
 	}
-	typeID := first(pickID(fields["issuetype"]), "10003")
+	typeID, err := s.resolveCreateTypeLocked(fields["issuetype"])
+	if err != nil {
+		return nil, err
+	}
 	parentKey, err := s.resolveParentLocked(typeID, pickKey(fields["parent"]))
 	if err != nil {
 		return nil, parentFieldError(err, parentCreateKeys)

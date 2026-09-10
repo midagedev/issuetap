@@ -43,6 +43,12 @@ func TestEmbeddedRestartSmoke(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Bootstrap the project explicitly — Cloud creates nothing implicitly
+	// on issue create (GDK-1211).
+	proj, _ := json.Marshal(map[string]any{"key": "EMB", "name": "Embedded"})
+	if code, body := authReq(t, e1, http.MethodPost, "/rest/api/3/project", proj, "application/json"); code != http.StatusCreated {
+		t.Fatalf("POST /project EMB: %d: %s", code, body)
+	}
 	payload, _ := json.Marshal(map[string]any{
 		"fields": map[string]any{
 			"project": map[string]any{"key": "EMB"},
@@ -122,6 +128,12 @@ func TestEmbeddedPersistFileSupersedesFixture(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatal(err)
+	}
+	// Project created explicitly first — unknown keys no longer create
+	// projects on issue create (GDK-1211).
+	proj, _ := json.Marshal(map[string]any{"key": "NEW", "name": "New"})
+	if code, body := authReq(t, e1, http.MethodPost, "/rest/api/3/project", proj, "application/json"); code != http.StatusCreated {
+		t.Fatalf("POST /project NEW: %d: %s", code, body)
 	}
 	payload, _ := json.Marshal(map[string]any{
 		"fields": map[string]any{

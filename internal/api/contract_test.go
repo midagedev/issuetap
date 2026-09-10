@@ -34,6 +34,11 @@ package api_test
 // | GET /issueLinkType catalog 4 types | TestIssueLinkTypeCatalog | TestPostIssueLinkUnknownType404 |
 // | POST /issueLink both sides + persist | TestPostIssueLinkStoresBothSides / TestPostIssueLinkSurvivesPersistReload | TestPostIssueLinkMissingIssue404 / TestPostIssueLinkSelf400 / TestPostIssueLinkIdempotentDoesNotDuplicate |
 // | writes: fixVersions/components typed (not Custom) | TestPutFixVersionsAddByIDThenJQL / TestPutComponentsAddByNameThenJQL / TestPutFixVersionsFieldsReplaceThenJQL / TestPutComponentsFieldsReplaceThenJQL | TestPutFixVersionsUnknownIDIs400 / TestPutFixVersionsFieldsUnknownIDIs400 / TestPutUnknownSystemKeyRejected |
+// | create rejects unknown project (no bootstrap) | TestPostIssueUnknownProjectIs400 | (store: TestCreateIssueUnknownProjectRejected; existing projects: TestCreateIssueExistingImplicitProjectStillWorks) |
+// | issuetype/priority catalog-validated on create+PUT | TestPostIssueUnknownIssueTypeIs400 | TestCreateIssueUnknownIssueTypeRejected / TestUpdateIssueRejectsUnknownIssueTypeID / TestUpdateIssueRejectsUnknownPriorityID |
+// | PUT all-or-nothing (GDK-1219) | TestMixedPut400LeavesIssueUnchanged | TestUpdateIssueMixedFailureAppliesNothing / TestUpdateIssueMixedUpdateOpFailureAppliesNothing / TestUpdateIssueFirstErrorIsDeterministic |
+// | CQL next link percent-encodes cql | TestCQLNextLinkEncodesCQL | (follows the link and re-parses it) |
+// | CQL ORDER BY direction honored; other fields 400 | TestCQLOrderByDirectionServes | TestCQLOrderByUnknownFieldIs400 / TestParseOrderByDirection / TestParseOrderByUnknownFieldIsError |
 // | GET transitions expand=transitions.fields | TestTransitionsExpandFieldsAlwaysPresent | TestTransitionsWithoutExpandOmitFields |
 // | POST transition fields.resolution | TestTransitionStoresRequestedResolution | TestTransitionRequiredResolution / TestTransitionRejectsFieldsWithoutScreen / TestTransitionRejectsUnknownResolution |
 // | POST done without fields defaults 10000 | TestTransitionDoneDefaultsResolution | TestTransitionClearsResolutionLeavingDone |

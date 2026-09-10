@@ -38,6 +38,9 @@ jobs:
       - name: Secretscan
         run: make secretscan
 
+      - name: Go fmt
+        run: make fmt
+
       - name: Go vet
         run: go vet ./...
 

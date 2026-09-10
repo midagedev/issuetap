@@ -1,4 +1,4 @@
-.PHONY: build test vet typecheck secretscan test-gadak docker scenario
+.PHONY: build test vet fmt typecheck secretscan test-gadak docker scenario
 
 build:
 	npm run build
@@ -6,6 +6,9 @@ build:
 
 vet:
 	go vet ./...
+
+fmt:
+	bash scripts/fmtcheck.sh
 
 test:
 	go test ./... -count=1

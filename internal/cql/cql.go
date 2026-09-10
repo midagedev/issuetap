@@ -50,10 +50,28 @@ func Parse(raw string) (Query, error) {
 	if s == "" {
 		return q, fmt.Errorf("cql: empty query")
 	}
-	// Peel order by.
+	// Peel order by — and read it (GDK-1210 ②: the direction used to be
+	// peeled off and discarded, so desc answered ascending). Only
+	// `lastmodified asc|desc` has a sort behind it; ordering by anything
+	// else would silently serve id order and look like it worked.
 	low := strings.ToLower(s)
 	if i := strings.Index(low, "order by"); i >= 0 {
+		tail := strings.TrimSpace(s[i+len("order by"):])
 		s = strings.TrimSpace(s[:i])
+		toks := strings.Fields(tail)
+		if len(toks) == 0 || len(toks) > 2 || !strings.EqualFold(toks[0], "lastmodified") {
+			return q, fmt.Errorf("cql: cannot parse order by %q", tail)
+		}
+		q.OrderAsc = true // bare `order by lastmodified` = asc, like Cloud
+		if len(toks) == 2 {
+			switch strings.ToLower(toks[1]) {
+			case "asc":
+			case "desc":
+				q.OrderAsc = false
+			default:
+				return q, fmt.Errorf("cql: cannot parse order by %q", tail)
+			}
+		}
 	}
 	if s == "" {
 		return q, nil

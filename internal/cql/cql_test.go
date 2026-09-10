@@ -44,6 +44,48 @@ func TestParseSpaceIn(t *testing.T) {
 	}
 }
 
+// GDK-1210 ②: the ORDER BY direction must reach the Query. `desc` used to
+// be peeled off with the clause and silently served ascending (OrderAsc is
+// initialized true and never reassigned) — SearchPages sorts on that flag,
+// so `order by lastmodified desc` answered oldest-first.
+func TestParseOrderByDirection(t *testing.T) {
+	q, err := Parse(`space="DOCS" AND type=page ORDER BY lastmodified DESC`)
+	if err != nil {
+		t.Fatalf("Parse desc: %v", err)
+	}
+	if q.OrderAsc {
+		t.Fatal("OrderAsc=true for DESC, want false")
+	}
+	for _, raw := range []string{
+		`space="DOCS" AND type=page order by lastmodified asc`,
+		`space="DOCS" AND type=page order by lastmodified`, // no direction = ASC
+	} {
+		q, err := Parse(raw)
+		if err != nil {
+			t.Fatalf("Parse(%q): %v", raw, err)
+		}
+		if !q.OrderAsc {
+			t.Fatalf("Parse(%q): OrderAsc=false, want true", raw)
+		}
+	}
+}
+
+// The peeled clause is not a free-text bucket. Ordering by anything but
+// lastmodified has no sort implementation behind it — serving such a query
+// in id order would look like it worked (the GDK-1209 silent-evaluation
+// class). Same honesty rule as every other clause here: error.
+func TestParseOrderByUnknownFieldIsError(t *testing.T) {
+	for _, raw := range []string{
+		`space="DOCS" order by title`,
+		`space="DOCS" order by lastmodified nonsense`,
+		`space="DOCS" order by`,
+	} {
+		if _, err := Parse(raw); err == nil {
+			t.Errorf("Parse(%q): want error, got nil", raw)
+		}
+	}
+}
+
 func TestParseSpaceInMalformedIsError(t *testing.T) {
 	for _, raw := range []string{
 		`space IN () AND type=page`,

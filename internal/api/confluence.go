@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 
@@ -126,7 +127,10 @@ func (s *Server) getContentSearch(w http.ResponseWriter, r *http.Request) {
 	links := map[string]any{"base": s.wikiBase(r)}
 	if end < len(all) {
 		// gadak's nextPath accepts /wiki/rest/... or /rest/... relative to wiki base.
-		links["next"] = "/rest/api/content/search?next=true&cursor=" + strconv.Itoa(end) + "&cql=" + cql + "&limit=" + strconv.Itoa(limit)
+		// The cql must be percent-encoded like Cloud's next links — raw
+		// concatenation put quotes/spaces (or a cql with % or &) straight
+		// into the query string, which corrupts on re-parse (GDK-1210 ①).
+		links["next"] = "/rest/api/content/search?next=true&cursor=" + strconv.Itoa(end) + "&cql=" + url.QueryEscape(cql) + "&limit=" + strconv.Itoa(limit)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"results": results,

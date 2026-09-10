@@ -463,9 +463,12 @@ func TestIssuetapCreateFieldsRequiredSet(t *testing.T) {
 }
 
 // TestGadakLinkRoundTrip is the seam for GET /issueLinkType + POST /issueLink:
-// gadak link resolves --type blocks against the catalog, POSTs type.id, then
-// both issues must show the Cloud direction (outward sees outwardIssue,
-// inward sees inwardIssue). Gadak's own tests hit an httptest fake.
+// gadak link resolves --type blocks against the catalog, POSTs type.id with
+// outwardIssue TAP-3 / inwardIssue TAP-1, then both issues must show the
+// Cloud direction: each element labels the other end by that end's role, so
+// TAP-1 (the inward end) shows outwardIssue TAP-3 and TAP-3 (the outward
+// end) shows inwardIssue TAP-1 — the assertions below. Gadak's own tests
+// hit an httptest fake.
 func TestGadakLinkRoundTrip(t *testing.T) {
 	src := gadakSrc(t)
 	if _, err := os.Stat(filepath.Join(src, "cmd", "gadak", "link.go")); err != nil {

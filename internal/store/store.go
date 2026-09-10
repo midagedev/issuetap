@@ -1779,6 +1779,159 @@ func (s *Store) Status(id string) *model.Status {
 	return &cp
 }
 
+// MergeStatus folds status fromID into toID — the admin verb for duplicate
+// catalog rows (gadak GDK-1356 remedy 1, GDK-1522). A cutover could seed
+// the default catalog (10000/3/10003) beside a migrated one, leaving two
+// ids answering one name ("In Progress" as both 3 and 10001), so every
+// name-keyed write was ambiguous. Every stored reference to from — issue
+// status ids, changelog status items (from/to ids; the authored from/to
+// display strings stay as the historical record), and the transition
+// screen keyed by status id — is rewritten to to inside one SQLite
+// transaction, and only then does the from row leave the catalog: a crash
+// between rewrites cannot leave issues pointing at a deleted status. The
+// survivor's transition screen wins when both ends had one; from's moves
+// only when to had none. Validation happens before the first mutation
+// (same rule as applyTransitionLocked): an unknown id, a self-merge, and
+// a pair whose status categories differ are all refused — a merge that
+// moved an issue between categories would silently change board lanes,
+// sprint sweeps, and the done/resolution lifecycle, which key on
+// statusCategory (never a name). Each issue row the rewrite touches gets
+// `updated` stamped from the store clock so an `updated >=` delta sync
+// re-reads it instead of keeping a dangling reference to the deleted id.
+// Not exposed over HTTP or the CLI: this is a one-shot maintenance verb
+// over a persist file.
+func (s *Store) MergeStatus(fromID, toID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	from := s.statusByIDLocked(fromID)
+	if from == nil {
+		return errNotFound("status", fromID)
+	}
+	to := s.statusByIDLocked(toID)
+	if to == nil {
+		return errNotFound("status", toID)
+	}
+	if from.ID == to.ID {
+		return fmt.Errorf("cannot merge status %s into itself", fromID)
+	}
+	if from.StatusCategory.Key != to.StatusCategory.Key {
+		return fmt.Errorf("cannot merge status %s (%s) into %s (%s): status categories differ",
+			fromID, from.StatusCategory.Key, toID, to.StatusCategory.Key)
+	}
+
+	tx, err := s.db.Begin() // the persist DSN sets _txlock=immediate
+	if err != nil {
+		return err
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback()
+		}
+	}()
+
+	// Read every issue row up front, rewrite after: issuing UPDATEs while
+	// a SELECT cursor is still open on issues errors on SQLite.
+	rows, err := tx.Query(`SELECT key, blob FROM issues`)
+	if err != nil {
+		return err
+	}
+	type issueRow struct {
+		key  string
+		blob []byte
+	}
+	var scanned []issueRow
+	for rows.Next() {
+		var r issueRow
+		if err := rows.Scan(&r.key, &r.blob); err != nil {
+			rows.Close()
+			return err
+		}
+		scanned = append(scanned, r)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	rows.Close()
+
+	now := clock.Format(s.clk.Tick())
+	for _, r := range scanned {
+		iss := decodeIssue(r.blob)
+		rewritten := mergeStatusRefs(&iss, fromID, toID)
+		if !rewritten {
+			continue
+		}
+		iss.Updated = now
+		if _, err := tx.Exec(`UPDATE issues SET blob=? WHERE key=?`, encodeIssue(&iss), r.key); err != nil {
+			return err
+		}
+	}
+
+	// The workflow-shaped reference: screens are keyed by destination
+	// status id (transition_screens.status_id).
+	var screen []byte
+	err = tx.QueryRow(`SELECT blob FROM transition_screens WHERE status_id=?`, fromID).Scan(&screen)
+	switch err {
+	case nil:
+		var survivor []byte
+		switch err := tx.QueryRow(`SELECT blob FROM transition_screens WHERE status_id=?`, toID).Scan(&survivor); err {
+		case nil: // the survivor keeps its own screen
+		case sql.ErrNoRows:
+			if _, err := tx.Exec(`INSERT OR REPLACE INTO transition_screens(status_id, blob) VALUES(?,?)`, toID, screen); err != nil {
+				return err
+			}
+		default:
+			return err
+		}
+		if _, err := tx.Exec(`DELETE FROM transition_screens WHERE status_id=?`, fromID); err != nil {
+			return err
+		}
+	case sql.ErrNoRows: // nothing keyed by the doomed id
+	default:
+		return err
+	}
+
+	if _, err := tx.Exec(`DELETE FROM statuses WHERE id=?`, fromID); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	committed = true
+	return s.markDirtyLocked()
+}
+
+// mergeStatusRefs rewrites iss's status references from fromID to toID in
+// place and reports whether anything changed. Changelog status items match
+// on the id axes only: stored rows carry fieldId "status" (makeHistory
+// normalizes authored "field"), and a From/To holding a name rather than
+// an id is a display string, not a catalog reference — it stays.
+func mergeStatusRefs(iss *model.Issue, fromID, toID string) bool {
+	rewritten := false
+	if iss.StatusID == fromID {
+		iss.StatusID = toID
+		rewritten = true
+	}
+	for hi := range iss.Histories {
+		for ii := range iss.Histories[hi].Items {
+			it := &iss.Histories[hi].Items[ii]
+			if it.FieldID != "status" && (it.FieldID != "" || normalizeFieldID(it.Field) != "status") {
+				continue
+			}
+			if it.From == fromID {
+				it.From = toID
+				rewritten = true
+			}
+			if it.To == fromID {
+				it.To = toID
+				rewritten = true
+			}
+		}
+	}
+	return rewritten
+}
+
 // Priorities most-urgent first.
 func (s *Store) Priorities() []model.Priority {
 	s.mu.RLock()

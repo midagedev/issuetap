@@ -232,6 +232,15 @@ func persistSchemaError(path string, have, want int) error {
 		path, have, want, backupPath(path, have))
 }
 
+// persistForeignError is the refusal for a SQLite file this build can read
+// the stamp of but which holds no issuetap graph — somebody else's database
+// under our path. Blaming the version would send the reader to upgrade a
+// binary that is already current, and point at a pre-upgrade copy nobody
+// ever took (gadak GDK-243).
+func persistForeignError(path string) error {
+	return fmt.Errorf("persist %s: this is a SQLite database, but not an issuetap one (no issues table) — point PersistPath at the workspace's own origin/issuetap.db, or move this file aside", path)
+}
+
 func isSQLiteFile(path string) (bool, error) {
 	f, err := os.Open(path)
 	if err != nil {
@@ -324,7 +333,7 @@ func openExistingFileDB(path, blobDir string) (*sql.DB, error) {
 	err = db.QueryRow(`SELECT name FROM sqlite_master WHERE type='table' AND name='issues'`).Scan(&tbl)
 	if err == sql.ErrNoRows {
 		db.Close()
-		return nil, persistSchemaError(path, have, persistSchemaVersion)
+		return nil, persistForeignError(path)
 	}
 	if err != nil {
 		db.Close()

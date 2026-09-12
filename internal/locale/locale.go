@@ -75,6 +75,14 @@ type names struct {
 	changelog  map[string]string // fieldId → display Field
 }
 
+// Every non-EN row has to translate every id it lists. KO and JA left 10016
+// and 10017 spelled in English while the four ids around them were not, and
+// nothing here said whether that was a decision or an omission — it read as
+// a decision because it had sat there. It reached a reader on 2026-09-12, in
+// the frames of gadak's Korean and Japanese landing clips: "(Backlog, 09-09)"
+// on the line above "(진행 중, 09-09)". DE keeps "Backlog" on purpose (German
+// Jira does too) but its 10017 has the same gap and is left for someone who
+// reads German.
 var catalogs = map[Code]names{
 	EN: {
 		status: map[string]string{
@@ -111,13 +119,13 @@ var catalogs = map[Code]names{
 		status: map[string]string{
 			"1": "할 일", "3": "진행 중", "5": "완료",
 			"10000": "해야 할 일", "10001": "진행 중", "10002": "검토 중",
-			"10003": "완료", "10016": "Backlog", "10017": "Selected for Development",
+			"10003": "완료", "10016": "백로그", "10017": "개발 대상 선택됨",
 			"10018": "완료",
 		},
 		statusByEN: map[string]string{
 			"to do": "해야 할 일", "in progress": "진행 중", "done": "완료",
-			"in review": "검토 중", "backlog": "Backlog",
-			"selected for development": "Selected for Development",
+			"in review": "검토 중", "backlog": "백로그",
+			"selected for development": "개발 대상 선택됨",
 			"할 일":                      "해야 할 일",
 		},
 		category: map[string]string{
@@ -136,20 +144,20 @@ var catalogs = map[Code]names{
 			"sub-task": "하위 작업", "subtask": "하위 작업", "feature": "기능", "request": "요청",
 		},
 		field:      koFields,
-		resolution: map[string]string{"10000": "완료", "10001": "Won't Do", "10002": "복제", "10003": "재현 불가"},
+		resolution: map[string]string{"10000": "완료", "10001": "하지 않음", "10002": "복제", "10003": "재현 불가"},
 		changelog:  koChangelog,
 	},
 	JA: {
 		status: map[string]string{
 			"1": "作業前", "3": "進行中", "5": "完了",
 			"10000": "作業前", "10001": "進行中", "10002": "レビュー中",
-			"10003": "完了", "10016": "Backlog", "10017": "Selected for Development",
+			"10003": "完了", "10016": "バックログ", "10017": "開発対象",
 			"10018": "完了",
 		},
 		statusByEN: map[string]string{
 			"to do": "作業前", "in progress": "進行中", "done": "完了",
-			"in review": "レビュー中", "backlog": "Backlog",
-			"selected for development": "Selected for Development",
+			"in review": "レビュー中", "backlog": "バックログ",
+			"selected for development": "開発対象",
 		},
 		category: map[string]string{
 			"new": "作業前", "indeterminate": "進行中", "inprogress": "進行中", "done": "完了",
